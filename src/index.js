@@ -76,6 +76,13 @@ export default {
     }
 
     try {
+    // AUTO-PROVISION TENANT IF FIRST TIME ACCESSED
+    if (identity && identity.tenantId) {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO tenants (tenant_id, company_name) VALUES (?, ?)"
+      ).bind(identity.tenantId, `${identity.tenantId} Enterprise Organization`).run();
+    }
+
       // =====================================================================
       // 1. EMPLOYEE ONBOARDING & 10-SEAT FREEMIUM ENFORCEMENT
       // =====================================================================
