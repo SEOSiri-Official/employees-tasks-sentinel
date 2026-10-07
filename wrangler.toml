@@ -1,0 +1,13 @@
+name = "employees-tasks-sentinel"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+routes = [
+  { pattern = "tasks.seosiri.com", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "employees-tasks-db"
+database_id = "cab89191-3936-4e12-9d6b-e7f7e0bd0189"

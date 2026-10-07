@@ -1,0 +1,13 @@
+{
+  "name": "employees-tasks-sentinel",
+  "version": "1.0.0",
+  "description": "Global multi-tenant employee task monitoring and telemetry gateway on Cloudflare Edge.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.100.0"
+  }
+}
