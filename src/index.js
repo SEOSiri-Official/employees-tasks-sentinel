@@ -90,6 +90,53 @@ export default {
         await ensureTenantAndEmployee(env, identity.tenantId, identity.deptId, identity.normalizedId, identity.role);
       }
 
+            // =====================================================================
+      // 1B. TENANT LICENSE ACTIVATION & SEAT STATS
+      // =====================================================================
+      if (url.pathname === "/v1/tenants/license" && request.method === "POST") {
+        if (identity.role !== "ADMIN") {
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required to activate license." }), { status: 403, headers: CORS_HEADERS });
+        }
+
+        const { licenseToken } = await request.json();
+        if (!licenseToken || typeof licenseToken !== "string") {
+          return new Response(JSON.stringify({ error: "INVALID_TOKEN", message: "License token string required." }), { status: 400, headers: CORS_HEADERS });
+        }
+
+        const isEnterprise = licenseToken.startsWith("ENT_");
+        const newTier = isEnterprise ? "ENTERPRISE" : "PRO";
+        const newMaxSeats = isEnterprise ? 5000 : 250;
+
+        await env.DB.prepare(
+          "UPDATE tenants SET tier = ?, license_token = ?, max_seats = ? WHERE tenant_id = ?"
+        ).bind(newTier, licenseToken.trim(), newMaxSeats, identity.tenantId).run();
+
+        return new Response(JSON.stringify({
+          status: "LICENSE_ACTIVATED",
+          tenant: identity.tenantId,
+          tier: newTier,
+          max_seats: newMaxSeats,
+          activated_at: new Date().toISOString()
+        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }
+
+      if (url.pathname === "/v1/tenants/stats" && request.method === "GET") {
+        const tenant = await env.DB.prepare("SELECT * FROM tenants WHERE tenant_id = ?").bind(identity.tenantId).first();
+        const seatCount = await env.DB.prepare("SELECT COUNT(*) as count FROM employees WHERE tenant_id = ?").bind(identity.tenantId).first();
+        const activeSeats = seatCount ? seatCount.count : 0;
+        const maxSeats = tenant ? tenant.max_seats : 10;
+        const currentTier = tenant ? tenant.tier : "FREE_SME";
+
+        return new Response(JSON.stringify({
+          tenant_id: identity.tenantId,
+          company_name: tenant ? tenant.company_name : `${identity.tenantId} Group`,
+          tier: currentTier,
+          active_seats: activeSeats,
+          max_seats: maxSeats,
+          is_free_tier: currentTier === "FREE_SME"
+        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }
+
       // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
@@ -219,8 +266,13 @@ export default {
       // 4. FETCH TASKS (Role-Partitioned)
       if (url.pathname === "/v1/tasks" && request.method === "GET") {
         let query;
+        const filterDept = url.searchParams.get("dept");
         if (identity.role === "ADMIN") {
-          query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? ORDER BY created_at DESC").bind(identity.tenantId);
+          if (filterDept && filterDept !== "ALL") {
+            query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND dept_id = ? ORDER BY created_at DESC").bind(identity.tenantId, filterDept);
+          } else {
+            query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? ORDER BY created_at DESC").bind(identity.tenantId);
+          }
         } else if (identity.role === "DEPT_HEAD") {
           query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND dept_id = ? ORDER BY created_at DESC").bind(identity.tenantId, identity.deptId);
         } else {
