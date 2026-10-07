@@ -6,12 +6,10 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Employee-ID, X-SEOSiri-Token",
 };
 
-// Robust Parser: Supports BOTH 'ETMAGJUMR62' (compact) and 'ETM-AG-JUM-R62' (hyphenated)
 function parseEmployeeId(rawId) {
   if (!rawId) return null;
   const cleaned = rawId.trim().toUpperCase();
 
-  // Hyphenated format: TENANT-DEPT-ROLE-CHECKSUM
   if (cleaned.includes("-")) {
     const parts = cleaned.split("-");
     if (parts.length >= 4) {
@@ -25,7 +23,6 @@ function parseEmployeeId(rawId) {
     }
   }
 
-  // Compact alphanumeric format (e.g. ETMAGJUMR62: 3-char Tenant, 2-char Dept, 3-char Role, remainder Checksum)
   if (cleaned.length >= 10) {
     const tenantId = cleaned.substring(0, 3);
     const deptId = cleaned.substring(3, 5);
@@ -42,28 +39,41 @@ function parseEmployeeId(rawId) {
   return null;
 }
 
+async function ensureTenantAndEmployee(env, tenantId, deptId, employeeId, role = "EMPLOYEE") {
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO tenants (tenant_id, company_name) VALUES (?, ?)"
+  ).bind(tenantId, `${tenantId} Enterprise Group`).run();
+
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO departments (dept_id, tenant_id, dept_name) VALUES (?, ?, ?)"
+  ).bind(deptId || "GENERAL", tenantId, `${deptId || "General"} Department`).run();
+
+  if (employeeId) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO employees (employee_id, tenant_id, dept_id, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(employeeId, tenantId, deptId || "GENERAL", role, `Member ${employeeId}`, `${employeeId.toLowerCase()}@seosiri.com`).run();
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 1. CORS Preflight
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
-    // 2. Health & Gateway Diagnostics
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         status: "HEALTHY",
         service: "SEOSiri Global Task Sentinel Gateway",
         gateway: "tasks.seosiri.com",
         engine: "Edge Multi-Tenant D1",
-        version: "1.1.0",
+        version: "1.2.0",
         timestamp: new Date().toISOString()
       }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
-    // 3. Authenticate Identity Header
     const rawEmployeeId = request.headers.get("X-Employee-ID");
     const identity = parseEmployeeId(rawEmployeeId);
     const isWebhook = url.pathname.startsWith("/v1/webhooks/");
@@ -76,29 +86,21 @@ export default {
     }
 
     try {
-    // AUTO-PROVISION TENANT IF FIRST TIME ACCESSED
-    if (identity && identity.tenantId) {
-      await env.DB.prepare(
-        "INSERT OR IGNORE INTO tenants (tenant_id, company_name) VALUES (?, ?)"
-      ).bind(identity.tenantId, `${identity.tenantId} Enterprise Organization`).run();
-    }
+      if (identity) {
+        await ensureTenantAndEmployee(env, identity.tenantId, identity.deptId, identity.normalizedId, identity.role);
+      }
 
-      // =====================================================================
-      // 1. EMPLOYEE ONBOARDING & 10-SEAT FREEMIUM ENFORCEMENT
-      // =====================================================================
+      // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Only Admins can register employees." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: CORS_HEADERS });
         }
 
         const body = await request.json();
         const tenant = await env.DB.prepare("SELECT * FROM tenants WHERE tenant_id = ?").bind(identity.tenantId).first();
-
-        // Count current active seats
         const seatCount = await env.DB.prepare("SELECT COUNT(*) as count FROM employees WHERE tenant_id = ?").bind(identity.tenantId).first();
         const currentSeats = seatCount ? seatCount.count : 0;
 
-        // Freemium Rule: 1-10 Employees Free; >10 requires valid PRO/ENTERPRISE token
         const isFreeTier = !tenant || tenant.tier === "FREE_SME";
         if (isFreeTier && currentSeats >= 10) {
           return new Response(JSON.stringify({
@@ -112,10 +114,9 @@ export default {
 
         const newEmpId = body.employeeId || `${identity.tenantId}${body.deptId || identity.deptId}EMP${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
-        await env.DB.prepare(`
-          INSERT INTO employees (employee_id, tenant_id, dept_id, role, full_name, email)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(newEmpId, identity.tenantId, body.deptId || identity.deptId, body.role || "EMPLOYEE", body.fullName, body.email).run();
+        await env.DB.prepare(
+          "INSERT INTO employees (employee_id, tenant_id, dept_id, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind(newEmpId, identity.tenantId, body.deptId || identity.deptId, body.role || "EMPLOYEE", body.fullName, body.email).run();
 
         return new Response(JSON.stringify({
           status: "REGISTERED",
@@ -124,9 +125,7 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // =====================================================================
-      // 2. TASK INGESTION: SINGLE ASSIGNMENT
-      // =====================================================================
+      // 2. ASSIGN SINGLE TASK
       if (url.pathname === "/v1/tasks/assign" && request.method === "POST") {
         if (identity.role !== "ADMIN" && identity.role !== "DEPT_HEAD") {
           return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin or Dept Head required." }), { status: 403, headers: CORS_HEADERS });
@@ -136,15 +135,17 @@ export default {
         const taskId = body.taskId || crypto.randomUUID();
         const isUrgent = Boolean(body.isUrgent);
         const status = isUrgent ? "URGENT" : "PENDING";
+        const assignedTo = body.assignedTo || identity.normalizedId;
 
-        await env.DB.prepare(`
-          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, created_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
+        await ensureTenantAndEmployee(env, identity.tenantId, body.deptId || identity.deptId, assignedTo, "EMPLOYEE");
+
+        await env.DB.prepare(
+          "INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
           taskId,
           identity.tenantId,
           body.deptId || identity.deptId,
-          body.assignedTo,
+          assignedTo,
           body.title,
           body.description || "",
           body.priority || "MEDIUM",
@@ -152,15 +153,13 @@ export default {
           identity.normalizedId
         ).run();
 
-        // If Urgent, auto-dispatch a Ping Notification to the assigned employee
         if (isUrgent) {
-          await env.DB.prepare(`
-            INSERT INTO notifications (notification_id, tenant_id, target_id, dept_id, type, title, message, task_id)
-            VALUES (?, ?, ?, ?, 'URGENT_TASK', ?, ?, ?)
-          `).bind(
+          await env.DB.prepare(
+            "INSERT INTO notifications (notification_id, tenant_id, target_id, dept_id, type, title, message, task_id) VALUES (?, ?, ?, ?, 'URGENT_TASK', ?, ?, ?)"
+          ).bind(
             crypto.randomUUID(),
             identity.tenantId,
-            body.assignedTo,
+            assignedTo,
             body.deptId || identity.deptId,
             `Urgent Task: ${body.title}`,
             `High-priority task assigned by ${identity.normalizedId}`,
@@ -171,15 +170,13 @@ export default {
         return new Response(JSON.stringify({
           status: "ASSIGNED",
           task_id: taskId,
-          assigned_to: body.assignedTo,
+          assigned_to: assignedTo,
           state: status,
           ping_dispatched: isUrgent
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // =====================================================================
-      // 3. TASK INGESTION: BULK CSV/JSON IMPORT
-      // =====================================================================
+      // 3. BULK CSV/JSON INGESTION
       if (url.pathname === "/v1/tasks/bulk" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
           return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: CORS_HEADERS });
@@ -190,15 +187,19 @@ export default {
           return new Response(JSON.stringify({ error: "INVALID_BATCH" }), { status: 400, headers: CORS_HEADERS });
         }
 
-        const statements = tasks.map(t => env.DB.prepare(`
-          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, source, created_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CSV_IMPORT', ?)
-          ON CONFLICT(task_id) DO UPDATE SET title = excluded.title, priority = excluded.priority
-        `).bind(
+        for (const t of tasks) {
+          if (t.assignedTo) {
+            await ensureTenantAndEmployee(env, identity.tenantId, t.deptId || identity.deptId, t.assignedTo, "EMPLOYEE");
+          }
+        }
+
+        const statements = tasks.map(t => env.DB.prepare(
+          "INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, source, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CSV_IMPORT', ?) ON CONFLICT(task_id) DO UPDATE SET title = excluded.title, priority = excluded.priority"
+        ).bind(
           t.taskId || crypto.randomUUID(),
           identity.tenantId,
           t.deptId || identity.deptId,
-          t.assignedTo,
+          t.assignedTo || identity.normalizedId,
           t.title,
           t.description || "",
           t.priority || "MEDIUM",
@@ -215,9 +216,7 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // =====================================================================
-      // 4. FETCH TASKS (Role-Partitioned Zero-Trust Query)
-      // =====================================================================
+      // 4. FETCH TASKS (Role-Partitioned)
       if (url.pathname === "/v1/tasks" && request.method === "GET") {
         let query;
         if (identity.role === "ADMIN") {
@@ -240,9 +239,7 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // =====================================================================
       // 5. STATUS TRANSITION & BLOCKER ESCALATION
-      // =====================================================================
       if (url.pathname === "/v1/tasks/status" && request.method === "POST") {
         const { taskId, newStatus, blockerReason } = await request.json();
 
@@ -262,25 +259,20 @@ export default {
           return new Response(JSON.stringify({ error: "UNAUTHORIZED_TASK_MUTATION" }), { status: 403, headers: CORS_HEADERS });
         }
 
-        // Update task state
-        await env.DB.prepare(`
-          UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?
-        `).bind(newStatus, taskId, identity.tenantId).run();
+        await env.DB.prepare(
+          "UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
+        ).bind(newStatus, taskId, identity.tenantId).run();
 
-        // Telemetry Ingestion
-        await env.DB.prepare(`
-          INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(
+        await env.DB.prepare(
+          "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
           crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, currentTask.status, newStatus, blockerReason || null
         ).run();
 
-        // If blocker is logged, auto-escalate Ping to Department Head and Admin
         if (blockerReason) {
-          await env.DB.prepare(`
-            INSERT INTO notifications (notification_id, tenant_id, target_id, dept_id, type, title, message, task_id)
-            VALUES (?, ?, 'DEPT_HEAD', ?, 'BLOCKER_ESCALATION', ?, ?, ?)
-          `).bind(
+          await env.DB.prepare(
+            "INSERT INTO notifications (notification_id, tenant_id, target_id, dept_id, type, title, message, task_id) VALUES (?, ?, 'DEPT_HEAD', ?, 'BLOCKER_ESCALATION', ?, ?, ?)"
+          ).bind(
             crypto.randomUUID(),
             identity.tenantId,
             currentTask.dept_id,
@@ -298,24 +290,18 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // =====================================================================
-      // 6. AUTONOMOUS PING NOTIFICATION ENGINE (/v1/notifications/ping)
-      // =====================================================================
+      // 6. AUTONOMOUS PINGS
       if (url.pathname === "/v1/notifications/ping" && request.method === "GET") {
         let pingsQuery;
-
         if (identity.role === "ADMIN") {
-          // Admin sees all unread notices + blocker alerts across company
           pingsQuery = env.DB.prepare(
             "SELECT * FROM notifications WHERE tenant_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 20"
           ).bind(identity.tenantId);
         } else if (identity.role === "DEPT_HEAD") {
-          // Dept Head sees department blocker pings and urgent notices
           pingsQuery = env.DB.prepare(
             "SELECT * FROM notifications WHERE tenant_id = ? AND (dept_id = ? OR target_id = ?) AND is_read = 0 ORDER BY created_at DESC LIMIT 20"
           ).bind(identity.tenantId, identity.deptId, identity.normalizedId);
         } else {
-          // Employee sees strictly their direct pings (urgent tasks, deadlines)
           pingsQuery = env.DB.prepare(
             "SELECT * FROM notifications WHERE tenant_id = ? AND target_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 10"
           ).bind(identity.tenantId, identity.normalizedId);
@@ -330,7 +316,7 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
-      // Acknowledge / Mark Ping as Read
+      // Acknowledge Ping
       if (url.pathname === "/v1/notifications/ack" && request.method === "POST") {
         const { notificationId } = await request.json();
         await env.DB.prepare(
@@ -340,9 +326,7 @@ export default {
         return new Response(JSON.stringify({ status: "ACKNOWLEDGED" }), { status: 200, headers: CORS_HEADERS });
       }
 
-      // =====================================================================
-      // 7. EXECUTIVE SUMMARY DIGEST (/v1/analytics/digest)
-      // =====================================================================
+      // 7. EXECUTIVE SUMMARY DIGEST
       if (url.pathname === "/v1/analytics/digest" && request.method === "GET") {
         if (identity.role !== "ADMIN" && identity.role !== "DEPT_HEAD") {
           return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: CORS_HEADERS });

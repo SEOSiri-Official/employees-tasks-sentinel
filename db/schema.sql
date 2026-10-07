@@ -1,25 +1,25 @@
--- 1. Tenant / Organization Registry (Supports Conglomerates & SMEs)
+-- 1. Tenants Table
 CREATE TABLE IF NOT EXISTS tenants (
-  tenant_id TEXT PRIMARY KEY,          -- e.g. 'ALPHA', 'BETA', 'ETM'
+  tenant_id TEXT PRIMARY KEY,
   company_name TEXT NOT NULL,
-  tier TEXT DEFAULT 'FREE_SME',        -- 'FREE_SME' (1-10 seats), 'PRO', 'ENTERPRISE'
-  license_token TEXT NULL,             -- Active HMAC-SHA256 Token
+  tier TEXT DEFAULT 'FREE_SME',
+  license_token TEXT NULL,
   max_seats INTEGER DEFAULT 10,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Departments
+-- 2. Departments Table
 CREATE TABLE IF NOT EXISTS departments (
-  dept_id TEXT NOT NULL,               -- e.g. 'ENG', 'BIOPHARMA', 'OPS', 'AG'
+  dept_id TEXT NOT NULL,
   tenant_id TEXT NOT NULL,
   dept_name TEXT NOT NULL,
   PRIMARY KEY (tenant_id, dept_id),
   FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
 
--- 3. Employees Table (Zero-Trust RBAC & Secure IDs)
+-- 3. Employees Table
 CREATE TABLE IF NOT EXISTS employees (
-  employee_id TEXT PRIMARY KEY,        -- e.g. 'ETMAGJUMR62' or 'ALPHA-ENG-EMP-8821'
+  employee_id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   dept_id TEXT NOT NULL,
   role TEXT CHECK(role IN ('ADMIN', 'DEPT_HEAD', 'EMPLOYEE')) DEFAULT 'EMPLOYEE',
@@ -30,23 +30,22 @@ CREATE TABLE IF NOT EXISTS employees (
   FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
 
--- 4. Tasks Table (Core 4-State Pipeline)
+-- 4. Tasks Table (The Core 4-State Pipeline)
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   dept_id TEXT NOT NULL,
-  assigned_to TEXT NOT NULL,           -- employee_id
+  assigned_to TEXT NOT NULL,
   title TEXT NOT NULL,
   description TEXT DEFAULT '',
   status TEXT CHECK(status IN ('URGENT', 'PROGRESS', 'PENDING', 'COMPLETE')) DEFAULT 'PENDING',
   priority TEXT CHECK(priority IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')) DEFAULT 'MEDIUM',
-  source TEXT DEFAULT 'MANUAL',        -- 'MANUAL', 'CSV_IMPORT', 'JIRA_SYNC'
-  external_ref TEXT NULL,              -- e.g. Jira Issue Key 'CX-104'
+  source TEXT DEFAULT 'MANUAL',
+  external_ref TEXT NULL,
   created_by TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
-  FOREIGN KEY (assigned_to) REFERENCES employees(employee_id) ON DELETE CASCADE
+  FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
 
 -- 5. Tasks Data Collector (Telemetry & Audit Log)
@@ -67,7 +66,7 @@ CREATE TABLE IF NOT EXISTS task_telemetry (
 CREATE TABLE IF NOT EXISTS notifications (
   notification_id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,             -- specific employee_id OR 'DEPT_HEAD' OR 'ADMIN'
+  target_id TEXT NOT NULL,
   dept_id TEXT NULL,
   type TEXT CHECK(type IN ('URGENT_TASK', 'DEADLINE_ALERT', 'BLOCKER_ESCALATION', 'SUMMARY_DIGEST')) NOT NULL,
   title TEXT NOT NULL,
@@ -78,7 +77,6 @@ CREATE TABLE IF NOT EXISTS notifications (
   FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
 
--- Indexes for sub-millisecond edge queries
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_emp ON tasks(tenant_id, assigned_to);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_telemetry_task ON task_telemetry(tenant_id, task_id);
