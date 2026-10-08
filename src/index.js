@@ -1,10 +1,20 @@
 // src/index.js - SEOSiri Global Workforce & Task Intelligence Gateway
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Employee-ID, X-SEOSiri-Token",
-};
+function getCorsHeaders(request) {
+  const origin = request.headers.get("Origin") || "";
+  const allowed = [
+    "https://board.seosiri.com",
+    "https://employees-tasks-board.pages.dev",
+    "https://developers.seosiri.com"
+  ];
+  const matchedOrigin = allowed.includes(origin) ? origin : "https://board.seosiri.com";
+
+  return {
+    "Access-Control-Allow-Origin": matchedOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Employee-ID, X-SEOSiri-Token",
+  };
+}
 
 function parseEmployeeId(rawId) {
   if (!rawId) return null;
@@ -77,7 +87,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return new Response(null, { status: 204, headers: getCorsHeaders(request) });
     }
 
     if (url.pathname === "/health") {
@@ -88,7 +98,7 @@ export default {
         engine: "Edge Multi-Tenant D1",
         version: "1.2.0",
         timestamp: new Date().toISOString()
-      }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
     }
 
     const rawEmployeeId = request.headers.get("X-Employee-ID");
@@ -99,7 +109,7 @@ export default {
       return new Response(JSON.stringify({
         error: "UNAUTHORIZED",
         message: "Missing or invalid X-Employee-ID header (Format: ETMAGJUMR62 or ETM-AG-JUM-R62)."
-      }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }), { status: 401, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
     }
 
     try {
@@ -112,12 +122,12 @@ export default {
       // =====================================================================
       if (url.pathname === "/v1/tenants/license" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required to activate license." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required to activate license." }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const { licenseToken } = await request.json();
         if (!licenseToken || typeof licenseToken !== "string") {
-          return new Response(JSON.stringify({ error: "INVALID_TOKEN", message: "License token string required." }), { status: 400, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "INVALID_TOKEN", message: "License token string required." }), { status: 400, headers: getCorsHeaders(request) });
         }
 
         const isEnterprise = licenseToken.startsWith("ENT_");
@@ -134,7 +144,7 @@ export default {
           tier: newTier,
           max_seats: newMaxSeats,
           activated_at: new Date().toISOString()
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       if (url.pathname === "/v1/tenants/stats" && request.method === "GET") {
@@ -151,7 +161,7 @@ export default {
           active_seats: activeSeats,
           max_seats: maxSeats,
           is_free_tier: currentTier === "FREE_SME"
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
             // =====================================================================
@@ -183,17 +193,17 @@ export default {
         return new Response(JSON.stringify({
           tenant: identity.tenantId,
           departments: depts.results
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       if (url.pathname === "/v1/departments" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Only Admins can add departments." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Only Admins can add departments." }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const { deptId, deptName } = await request.json();
         if (!deptId || !deptName) {
-          return new Response(JSON.stringify({ error: "INVALID_PAYLOAD", message: "deptId and deptName required." }), { status: 400, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "INVALID_PAYLOAD", message: "deptId and deptName required." }), { status: 400, headers: getCorsHeaders(request) });
         }
 
         const cleanDeptId = deptId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
@@ -205,13 +215,13 @@ export default {
           status: "DEPARTMENT_CREATED",
           dept_id: cleanDeptId,
           dept_name: deptName.trim()
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const body = await request.json();
@@ -227,7 +237,7 @@ export default {
             current_seats: currentSeats,
             settlement_contact: "badhan_pbn@yahoo.com",
             portal: "https://developers.seosiri.com/#key-issuer"
-          }), { status: 402, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+          }), { status: 402, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
         }
 
         const newEmpId = body.employeeId || `${identity.tenantId}${body.deptId || identity.deptId}EMP${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
@@ -240,13 +250,13 @@ export default {
           status: "REGISTERED",
           employee_id: newEmpId,
           total_active_seats: currentSeats + 1
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 2. ASSIGN SINGLE TASK
       if (url.pathname === "/v1/tasks/assign" && request.method === "POST") {
         if (identity.role !== "ADMIN" && identity.role !== "DEPT_HEAD") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin or Dept Head required." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin or Dept Head required." }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const body = await request.json();
@@ -291,18 +301,18 @@ export default {
           assigned_to: assignedTo,
           state: status,
           ping_dispatched: isUrgent
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 3. BULK CSV/JSON INGESTION
       if (url.pathname === "/v1/tasks/bulk" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Admin role required." }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const { tasks } = await request.json();
         if (!Array.isArray(tasks) || tasks.length === 0) {
-          return new Response(JSON.stringify({ error: "INVALID_BATCH" }), { status: 400, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "INVALID_BATCH" }), { status: 400, headers: getCorsHeaders(request) });
         }
 
         for (const t of tasks) {
@@ -325,13 +335,18 @@ export default {
           identity.normalizedId
         ));
 
-        await env.DB.batch(statements);
+        // Safe chunking (100 statements max per D1 execution)
+        const chunkSize = 100;
+        for (let i = 0; i < statements.length; i += chunkSize) {
+          const chunk = statements.slice(i, i + chunkSize);
+          await env.DB.batch(chunk);
+        }
 
         return new Response(JSON.stringify({
           status: "BULK_INGESTED_SUCCESSFULLY",
           tenant: identity.tenantId,
           total_ingested: tasks.length
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 4. FETCH TASKS (Role-Partitioned)
@@ -359,7 +374,7 @@ export default {
           role: identity.role,
           count: data.results.length,
           tasks: data.results
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 5. STATUS TRANSITION & BLOCKER ESCALATION
@@ -367,7 +382,7 @@ export default {
         const { taskId, newStatus, blockerReason } = await request.json();
 
         if (!["URGENT", "PROGRESS", "PENDING", "COMPLETE"].includes(newStatus)) {
-          return new Response(JSON.stringify({ error: "INVALID_STATUS" }), { status: 400, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "INVALID_STATUS" }), { status: 400, headers: getCorsHeaders(request) });
         }
 
         const currentTask = await env.DB.prepare(
@@ -375,11 +390,11 @@ export default {
         ).bind(taskId, identity.tenantId).first();
 
         if (!currentTask) {
-          return new Response(JSON.stringify({ error: "TASK_NOT_FOUND" }), { status: 404, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "TASK_NOT_FOUND" }), { status: 404, headers: getCorsHeaders(request) });
         }
 
         if (identity.role === "EMPLOYEE" && currentTask.assigned_to !== identity.normalizedId) {
-          return new Response(JSON.stringify({ error: "UNAUTHORIZED_TASK_MUTATION" }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "UNAUTHORIZED_TASK_MUTATION" }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         await env.DB.prepare(
@@ -415,7 +430,7 @@ export default {
           task_id: taskId,
           current: newStatus,
           blocker_escalated: Boolean(blockerReason)
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // 6. AUTONOMOUS PINGS
@@ -441,7 +456,7 @@ export default {
           recipient: identity.normalizedId,
           unread_pings_count: pings.results.length,
           notifications: pings.results
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
       // Acknowledge Ping
@@ -451,13 +466,13 @@ export default {
           "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND tenant_id = ?"
         ).bind(notificationId, identity.tenantId).run();
 
-        return new Response(JSON.stringify({ status: "ACKNOWLEDGED" }), { status: 200, headers: CORS_HEADERS });
+        return new Response(JSON.stringify({ status: "ACKNOWLEDGED" }), { status: 200, headers: getCorsHeaders(request) });
       }
 
       // 7. EXECUTIVE SUMMARY DIGEST
       if (url.pathname === "/v1/analytics/digest" && request.method === "GET") {
         if (identity.role !== "ADMIN" && identity.role !== "DEPT_HEAD") {
-          return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: getCorsHeaders(request) });
         }
 
         const totalTasks = await env.DB.prepare("SELECT COUNT(*) as count FROM tasks WHERE tenant_id = ?").bind(identity.tenantId).first();
@@ -481,13 +496,13 @@ export default {
           },
           health_state: urgentCount.count > 5 ? "WARNING_BOTTLENECK_DETECTED" : "OPTIMAL_FLOW",
           generated_at: new Date().toISOString()
-        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+        }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
-      return new Response(JSON.stringify({ error: "ENDPOINT_NOT_FOUND" }), { status: 404, headers: CORS_HEADERS });
+      return new Response(JSON.stringify({ error: "ENDPOINT_NOT_FOUND" }), { status: 404, headers: getCorsHeaders(request) });
 
     } catch (err) {
-      return new Response(JSON.stringify({ error: "EDGE_EXCEPTION", details: err.message }), { status: 500, headers: CORS_HEADERS });
+      return new Response(JSON.stringify({ error: "EDGE_EXCEPTION", details: err.message }), { status: 500, headers: getCorsHeaders(request) });
     }
   }
 };
