@@ -49,9 +49,26 @@ async function ensureTenantAndEmployee(env, tenantId, deptId, employeeId, role =
   ).bind(deptId || "GENERAL", tenantId, `${deptId || "General"} Department`).run();
 
   if (employeeId) {
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO employees (employee_id, tenant_id, dept_id, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)"
-    ).bind(employeeId, tenantId, deptId || "GENERAL", role, `Member ${employeeId}`, `${employeeId.toLowerCase()}@seosiri.com`).run();
+    // Check if employee already exists
+    const existing = await env.DB.prepare(
+      "SELECT employee_id FROM employees WHERE employee_id = ? AND tenant_id = ?"
+    ).bind(employeeId, tenantId).first();
+
+    if (!existing) {
+      // Enforce 10-seat cap for new auto-provisioned employees
+      const tenant = await env.DB.prepare("SELECT tier, max_seats FROM tenants WHERE tenant_id = ?").bind(tenantId).first();
+      const seatCount = await env.DB.prepare("SELECT COUNT(*) as count FROM employees WHERE tenant_id = ?").bind(tenantId).first();
+      const current = seatCount ? seatCount.count : 0;
+      const maxAllowed = tenant ? tenant.max_seats : 10;
+
+      if ((!tenant || tenant.tier === "FREE_SME") && current >= maxAllowed) {
+        throw new Error(`SEAT_LIMIT_REACHED: Organization has reached the free cap (${maxAllowed} seats). Upgrade via developers.seosiri.com/#key-issuer`);
+      }
+
+      await env.DB.prepare(
+        "INSERT INTO employees (employee_id, tenant_id, dept_id, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)"
+      ).bind(employeeId, tenantId, deptId || "GENERAL", role, `Member ${employeeId}`, `${employeeId.toLowerCase()}@seosiri.com`).run();
+    }
   }
 }
 
@@ -315,10 +332,15 @@ export default {
           "UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
         ).bind(newStatus, taskId, identity.tenantId).run();
 
+        // Compute exact elapsed transition seconds
+        const elapsedSeconds = currentTask.updated_at 
+          ? Math.max(0, Math.round((Date.now() - new Date(currentTask.updated_at).getTime()) / 1000))
+          : 0;
+
         await env.DB.prepare(
-          "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
+          "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason, transition_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(
-          crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, currentTask.status, newStatus, blockerReason || null
+          crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, currentTask.status, newStatus, blockerReason || null, elapsedSeconds
         ).run();
 
         if (blockerReason) {
