@@ -154,6 +154,60 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
       }
 
+            // =====================================================================
+      // DYNAMIC DEPARTMENT ENGINE (FOR ANY GLOBAL ENTERPRISE)
+      // =====================================================================
+      if (url.pathname === "/v1/departments" && request.method === "GET") {
+        let depts = await env.DB.prepare(
+          "SELECT dept_id, dept_name FROM departments WHERE tenant_id = ? ORDER BY dept_name ASC"
+        ).bind(identity.tenantId).all();
+
+        // If company has no departments yet, auto-seed standard universal defaults
+        if (!depts.results || depts.results.length === 0) {
+          const defaultSeeds = [
+            ["OPERATIONS", "Operations & Delivery"],
+            ["ENGINEERING", "Engineering & Tech"],
+            ["GROWTH", "Sales & Marketing"],
+            ["EXECUTIVE", "Leadership & Strategy"]
+          ];
+          for (const [dId, dName] of defaultSeeds) {
+            await env.DB.prepare(
+              "INSERT OR IGNORE INTO departments (dept_id, tenant_id, dept_name) VALUES (?, ?, ?)"
+            ).bind(dId, identity.tenantId, dName).run();
+          }
+          depts = await env.DB.prepare(
+            "SELECT dept_id, dept_name FROM departments WHERE tenant_id = ? ORDER BY dept_name ASC"
+          ).bind(identity.tenantId).all();
+        }
+
+        return new Response(JSON.stringify({
+          tenant: identity.tenantId,
+          departments: depts.results
+        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }
+
+      if (url.pathname === "/v1/departments" && request.method === "POST") {
+        if (identity.role !== "ADMIN") {
+          return new Response(JSON.stringify({ error: "FORBIDDEN", message: "Only Admins can add departments." }), { status: 403, headers: CORS_HEADERS });
+        }
+
+        const { deptId, deptName } = await request.json();
+        if (!deptId || !deptName) {
+          return new Response(JSON.stringify({ error: "INVALID_PAYLOAD", message: "deptId and deptName required." }), { status: 400, headers: CORS_HEADERS });
+        }
+
+        const cleanDeptId = deptId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+        await env.DB.prepare(
+          "INSERT OR REPLACE INTO departments (dept_id, tenant_id, dept_name) VALUES (?, ?, ?)"
+        ).bind(cleanDeptId, identity.tenantId, deptName.trim()).run();
+
+        return new Response(JSON.stringify({
+          status: "DEPARTMENT_CREATED",
+          dept_id: cleanDeptId,
+          dept_name: deptName.trim()
+        }), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      }
+
       // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
