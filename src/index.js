@@ -218,6 +218,119 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...getCorsHeaders(request) } });
       }
 
+      
+      // =====================================================================
+      // 1. URGENT TASK ACKNOWLEDGMENT
+      // =====================================================================
+      if (url.pathname === "/v1/tasks/acknowledge" && request.method === "POST") {
+        const { taskId } = await request.json();
+        
+        const task = await env.DB.prepare(
+          "SELECT * FROM tasks WHERE task_id = ? AND tenant_id = ?"
+        ).bind(taskId, identity.tenantId).first();
+
+        if (!task) {
+          return new Response(JSON.stringify({ error: "TASK_NOT_FOUND" }), { status: 404, headers: getCorsHeaders(request) });
+        }
+
+        // Transition task to PROGRESS
+        await env.DB.prepare(
+          "UPDATE tasks SET status = 'PROGRESS', updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
+        ).bind(taskId, identity.tenantId).run();
+
+        // Notify management that urgent task is accepted
+        await env.DB.prepare(
+          "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, ?, 'URGENT_ACCEPTED', ?, ?)"
+        ).bind(
+          crypto.randomUUID(), identity.tenantId, "DEPT_HEAD",
+          `Urgent Task Acknowledged: ${task.title}`,
+          `${identity.normalizedId} has accepted and started work on ${task.title}.`
+        ).run();
+
+        return new Response(JSON.stringify({ status: "ACKNOWLEDGED", taskId }), { status: 200, headers: getCorsHeaders(request) });
+      }
+
+      // =====================================================================
+      // 2. THREADED COMMENTS & MANAGERIAL FEEDBACK
+      // =====================================================================
+      if (url.pathname.startsWith("/v1/tasks/") && url.pathname.endsWith("/comments")) {
+        const parts = url.pathname.split("/");
+        const taskId = parts[3];
+
+        if (request.method === "GET") {
+          const comments = await env.DB.prepare(
+            "SELECT * FROM task_comments WHERE task_id = ? AND tenant_id = ? ORDER BY created_at ASC"
+          ).bind(taskId, identity.tenantId).all();
+
+          return new Response(JSON.stringify({ taskId, comments: comments.results || [] }), { status: 200, headers: getCorsHeaders(request) });
+        }
+
+        if (request.method === "POST") {
+          const { content } = await request.json();
+          if (!content || !content.trim()) {
+            return new Response(JSON.stringify({ error: "EMPTY_COMMENT" }), { status: 400, headers: getCorsHeaders(request) });
+          }
+
+          const commentId = crypto.randomUUID();
+          await env.DB.prepare(
+            "INSERT INTO task_comments (comment_id, task_id, tenant_id, author_id, author_role, content) VALUES (?, ?, ?, ?, ?, ?)"
+          ).bind(commentId, taskId, identity.tenantId, identity.normalizedId, identity.role, content.trim()).run();
+
+          // Look up task assignee to send a ping notice if manager commented
+          const task = await env.DB.prepare("SELECT assigned_to, title FROM tasks WHERE task_id = ?").bind(taskId).first();
+          if (task && task.assigned_to !== identity.normalizedId) {
+            await env.DB.prepare(
+              "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, ?, 'COMMENT', ?, ?)"
+            ).bind(
+              crypto.randomUUID(), identity.tenantId, task.assigned_to,
+              `Feedback on: ${task.title}`,
+              `${identity.normalizedId} (${identity.role}): "${content.substring(0, 80)}..."`
+            ).run();
+          }
+
+          return new Response(JSON.stringify({ status: "COMMENT_ADDED", commentId }), { status: 201, headers: getCorsHeaders(request) });
+        }
+      }
+
+      // =====================================================================
+      // 3. AUTONOMOUS AUTO-DISPATCH (PULL NEXT TASK FOR FREE EMPLOYEE)
+      // =====================================================================
+      if (url.pathname === "/v1/tasks/auto-dispatch" && request.method === "POST") {
+        // Check if employee has zero in-flight tasks
+        const activeCount = await env.DB.prepare(
+          "SELECT COUNT(*) as cnt FROM tasks WHERE tenant_id = ? AND assigned_to = ? AND status = 'PROGRESS'"
+        ).bind(identity.tenantId, identity.normalizedId).first();
+
+        if (activeCount && activeCount.cnt > 0) {
+          return new Response(JSON.stringify({ status: "BUSY", message: "Employee already has active tasks in flight." }), { status: 200, headers: getCorsHeaders(request) });
+        }
+
+        // Pull highest priority pending/unassigned task from their department
+        const nextTask = await env.DB.prepare(
+          "SELECT * FROM tasks WHERE tenant_id = ? AND dept_id = ? AND status = 'PENDING' AND (assigned_to = ? OR assigned_to = '' OR assigned_to IS NULL) ORDER BY CASE priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END, created_at ASC LIMIT 1"
+        ).bind(identity.tenantId, identity.deptId, identity.normalizedId).first();
+
+        if (!nextTask) {
+          return new Response(JSON.stringify({ status: "NO_PENDING_TASKS", message: "Queue is clean. No pending tasks to dispatch." }), { status: 200, headers: getCorsHeaders(request) });
+        }
+
+        // Auto-assign and transition to PROGRESS
+        await env.DB.prepare(
+          "UPDATE tasks SET assigned_to = ?, status = 'PROGRESS', updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
+        ).bind(identity.normalizedId, nextTask.task_id, identity.tenantId).run();
+
+        // Notify employee
+        await env.DB.prepare(
+          "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, ?, 'AUTO_DISPATCH', ?, ?)"
+        ).bind(
+          crypto.randomUUID(), identity.tenantId, identity.normalizedId,
+          `Auto-Dispatched Task: ${nextTask.title}`,
+          `You were free! The system automatically queued your next high-priority task.`
+        ).run();
+
+        return new Response(JSON.stringify({ status: "DISPATCHED", task: nextTask }), { status: 200, headers: getCorsHeaders(request) });
+      }
+
       // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
