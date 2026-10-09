@@ -331,6 +331,56 @@ export default {
         return new Response(JSON.stringify({ status: "DISPATCHED", task: nextTask }), { status: 200, headers: getCorsHeaders(request) });
       }
 
+      
+      // =====================================================================
+      // BIDIRECTIONAL JIRA WEBHOOK LISTENER
+      // =====================================================================
+      if (url.pathname === "/v1/webhooks/jira" && request.method === "POST") {
+        try {
+          const payload = await request.json();
+          const eventType = payload.webhookEvent || payload.timestamp;
+          const issue = payload.issue;
+
+          if (!issue) {
+            return new Response(JSON.stringify({ status: "IGNORED", reason: "No issue payload" }), { status: 200, headers: getCorsHeaders(request) });
+          }
+
+          const issueKey = issue.key; // e.g. SCO-1
+          const summary = issue.fields.summary || "Jira Task";
+          const statusName = issue.fields.status?.name || "Pending";
+          const priorityName = (issue.fields.priority?.name || "Medium").toUpperCase();
+          const projectKey = issue.fields.project?.key || "DEFAULT";
+
+          // Map Jira status to Sentinel status
+          let sentinelStatus = "PENDING";
+          if (statusName.includes("In Progress") || statusName.includes("PROGRESS")) sentinelStatus = "PROGRESS";
+          else if (statusName.includes("Done") || statusName.includes("Complete") || statusName.includes("Resolved")) sentinelStatus = "COMPLETE";
+          else if (statusName.includes("Urgent")) sentinelStatus = "URGENT";
+
+          // Insert or update task in Cloudflare D1
+          await env.DB.prepare(`
+            INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'JIRA')
+            ON CONFLICT(task_id) DO UPDATE SET 
+              title = excluded.title, 
+              status = excluded.status,
+              updated_at = CURRENT_TIMESTAMP
+          `).bind(
+            issueKey, projectKey, projectKey, "ETM-AG-EMP-R62", summary, priorityName, sentinelStatus
+          ).run();
+
+          return new Response(JSON.stringify({
+            status: "JIRA_WEBHOOK_PROCESSED",
+            issueKey,
+            sentinelStatus,
+            syncedAt: new Date().toISOString()
+          }), { status: 200, headers: { "Content-Type": "application/json", getCorsHeaders: getCorsHeaders(request) } });
+
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: getCorsHeaders(request) });
+        }
+      }
+
       // 1. REGISTER EMPLOYEE & 10-SEAT FREEMIUM CHECK
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
         if (identity.role !== "ADMIN") {
