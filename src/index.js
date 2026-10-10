@@ -376,6 +376,34 @@ export default {
         }
       }
 
+            // 11. ACKNOWLEDGE & DISMISS NOTIFICATIONS (FIXES STUCK PING BANNER)
+      if (url.pathname === "/v1/notifications/ack" && request.method === "POST") {
+        const { notificationId } = await request.json();
+        if (notificationId) {
+          await env.DB.prepare(
+            "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND tenant_id = ?"
+          ).bind(notificationId, identity.tenantId).run();
+        } else {
+          // Mark all as read for this tenant/user
+          await env.DB.prepare(
+            "UPDATE notifications SET is_read = 1 WHERE tenant_id = ?"
+          ).bind(identity.tenantId).run();
+        }
+        return new Response(JSON.stringify({ status: "ACKNOWLEDGED", notificationId }), { status: 200, headers: corsHeaders });
+      }
+
+            // 12. PURGE TEST/DUMMY ARTIFACTS
+      if (url.pathname === "/v1/tasks/purge-tests" && request.method === "POST") {
+        if (identity.role !== "ADMIN") {
+          return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: corsHeaders });
+        }
+        const del = await env.DB.prepare(
+          "DELETE FROM tasks WHERE tenant_id = ? AND (title LIKE 'Chunk Test%' OR title LIKE 'Batch Task%')"
+        ).bind(identity.tenantId).run();
+
+        return new Response(JSON.stringify({ status: "PURGED", deleted_count: del.meta.changes }), { status: 200, headers: corsHeaders });
+      }
+
       // Notifications & Stats
       if (url.pathname === "/v1/notifications/ping" && request.method === "GET") {
         const pings = await env.DB.prepare(
