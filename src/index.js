@@ -87,8 +87,8 @@ export default {
         else if (statusName.includes("DONE") || statusName.includes("RESOLVED")) sentinelStatus = "COMPLETE";
 
         await env.DB.prepare(`
-          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, source)
-          VALUES (?, ?, 'ENG', 'ETM-AG-EMP-R62', ?, 'HIGH', ?, 'JIRA')
+          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
+          VALUES (?, ?, 'ENG', 'ETM-AG-EMP-R62', ?, 'HIGH', ?, 'JIRA_WEBHOOK', 'JIRA')
           ON CONFLICT(task_id) DO UPDATE SET title = excluded.title, status = excluded.status, updated_at = CURRENT_TIMESTAMP
         `).bind(issueKey, projectKey, `[Jira ${issueKey}] ${summary}`, sentinelStatus).run();
 
@@ -123,7 +123,11 @@ export default {
         const fullName = (body.fullName || "").trim();
         const email = (body.email || "").trim();
         const deptId = (body.deptId || "AG").trim().toUpperCase();
-        const role = (body.role || "EMP").trim().toUpperCase();
+        let rawRole = (body.role || "EMPLOYEE").trim().toUpperCase();
+        let role = "EMPLOYEE";
+        if (rawRole === "ADM" || rawRole === "ADMIN") role = "ADMIN";
+        else if (rawRole === "DEPT" || rawRole === "DEPT_HEAD") role = "DEPT_HEAD";
+        else role = "EMPLOYEE";
 
         if (!fullName || !email) {
           return new Response(JSON.stringify({ error: "INVALID_PAYLOAD", message: "fullName and email are required." }), {
@@ -234,9 +238,9 @@ export default {
         `).bind(deptId, identity.tenantId, `${deptId} Department`).run();
 
         await env.DB.prepare(`
-          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(taskId, identity.tenantId, deptId, assignedTo, title, priority, status).run();
+          INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BOARD')
+        `).bind(taskId, identity.tenantId, deptId, assignedTo, title, priority, status, identity.normalizedId).run();
 
         return new Response(JSON.stringify({ status: "ASSIGNED", taskId, title }), {
           status: 201,
@@ -249,9 +253,9 @@ export default {
         const { tasks } = await request.json();
         const statements = tasks.map(t => 
           env.DB.prepare(`
-            INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).bind(crypto.randomUUID(), identity.tenantId, (t.deptId || "AG").toUpperCase(), t.assignedTo || identity.normalizedId, t.title, t.priority || "MEDIUM", t.isUrgent ? "URGENT" : "PROGRESS")
+            INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CSV')
+          `).bind(crypto.randomUUID(), identity.tenantId, (t.deptId || "AG").toUpperCase(), t.assignedTo || identity.normalizedId, t.title, t.priority || "MEDIUM", t.isUrgent ? "URGENT" : "PROGRESS", identity.normalizedId)
         );
 
         const chunkSize = 100;
