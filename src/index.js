@@ -397,6 +397,19 @@ export default {
         if (identity.role !== "ADMIN") {
           return new Response(JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: corsHeaders });
         }
+        // 1. Delete child telemetry logs
+        await env.DB.prepare(`
+          DELETE FROM task_telemetry 
+          WHERE task_id IN (SELECT task_id FROM tasks WHERE tenant_id = ? AND (title LIKE 'Chunk Test%' OR title LIKE 'Batch Task%'))
+        `).bind(identity.tenantId).run();
+
+        // 2. Delete child comments
+        await env.DB.prepare(`
+          DELETE FROM task_comments 
+          WHERE task_id IN (SELECT task_id FROM tasks WHERE tenant_id = ? AND (title LIKE 'Chunk Test%' OR title LIKE 'Batch Task%'))
+        `).bind(identity.tenantId).run();
+
+        // 3. Delete parent tasks safely
         const del = await env.DB.prepare(
           "DELETE FROM tasks WHERE tenant_id = ? AND (title LIKE 'Chunk Test%' OR title LIKE 'Batch Task%')"
         ).bind(identity.tenantId).run();
