@@ -243,6 +243,14 @@ export default {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BOARD')
         `).bind(taskId, identity.tenantId, deptId, assignedTo, title, priority, status, identity.normalizedId).run();
 
+        // Trigger notification ping if marked urgent
+        if (isUrgent) {
+          await env.DB.prepare(`
+            INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message)
+            VALUES (?, ?, ?, 'URGENT', 'Urgent Task Assigned', ?)
+          `).bind(crypto.randomUUID(), identity.tenantId, assignedTo, `High priority task assigned: ${title}`).run();
+        }
+
         return new Response(JSON.stringify({ status: "ASSIGNED", taskId, title }), {
           status: 201,
           headers: { "Content-Type": "application/json", ...corsHeaders }
