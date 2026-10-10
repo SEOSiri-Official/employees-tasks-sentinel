@@ -80,7 +80,8 @@ export default {
         const issueKey = issue.key;
         const summary = issue.fields?.summary || "Jira Task";
         const statusName = (issue.fields?.status?.name || "Pending").toUpperCase();
-        const projectKey = (issue.fields?.project?.key || "ETM").toUpperCase();
+        const tenantParam = url.searchParams.get("tenant");
+        const projectKey = (tenantParam || issue.fields?.project?.key || "ETM").toUpperCase();
 
         let sentinelStatus = "PENDING";
         if (statusName.includes("PROGRESS")) sentinelStatus = "PROGRESS";
@@ -282,6 +283,40 @@ export default {
           await env.DB.prepare(
             "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, 'ADMIN', 'BLOCKER', 'Task Blocked', ?)"
           ).bind(crypto.randomUUID(), identity.tenantId, blockerReason).run();
+        }
+
+        
+        // Outbound Jira Transition Sync
+        if (newStatus === "COMPLETE" && env.JIRA_BASE_URL && env.JIRA_API_TOKEN) {
+          const taskRecord = await env.DB.prepare("SELECT source, task_id FROM tasks WHERE task_id = ?").bind(taskId).first();
+          if (taskRecord && taskRecord.source === "JIRA") {
+            ctx.waitUntil((async () => {
+              try {
+                const authHeader = "Basic " + btoa(`${env.JIRA_USER_EMAIL}:${env.JIRA_API_TOKEN}`);
+                // 1. Get transitions for the issue
+                const transRes = await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                  headers: { "Authorization": authHeader, "Accept": "application/json" }
+                });
+                if (transRes.ok) {
+                  const transData = await transRes.json();
+                  const doneTrans = transData.transitions?.find(t => 
+                    t.name.toLowerCase().includes("done") || 
+                    t.name.toLowerCase().includes("complete") || 
+                    t.name.toLowerCase().includes("resolved")
+                  );
+                  if (doneTrans) {
+                    await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                      method: "POST",
+                      headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+                      body: JSON.stringify({ transition: { id: doneTrans.id } })
+                    });
+                  }
+                }
+              } catch (e) {
+                console.error("Jira outbound sync failed", e);
+              }
+            })());
+          }
         }
 
         return new Response(JSON.stringify({ status: "TRANSITION_LOGGED", taskId, newStatus }), { status: 200, headers: corsHeaders });
