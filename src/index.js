@@ -501,9 +501,17 @@ export default {
 
       // Notifications & Stats
       if (url.pathname === "/v1/notifications/ping" && request.method === "GET") {
-        const pings = await env.DB.prepare(
-          "SELECT * FROM notifications WHERE tenant_id = ? AND is_read = 0 ORDER BY created_at DESC"
-        ).bind(identity.tenantId).all();
+        // Scoped notifications: Admins see ADMIN/DEPT_HEAD pings; Employees see ONLY their own
+        let pings;
+        if (identity.role === "ADMIN") {
+          pings = await env.DB.prepare(
+            "SELECT * FROM notifications WHERE tenant_id = ? AND (target_id = 'ADMIN' OR target_id = ? OR target_id = 'DEPT_HEAD') AND is_read = 0 ORDER BY created_at DESC LIMIT 10"
+          ).bind(identity.tenantId, identity.normalizedId).all();
+        } else {
+          pings = await env.DB.prepare(
+            "SELECT * FROM notifications WHERE tenant_id = ? AND target_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 10"
+          ).bind(identity.tenantId, identity.normalizedId).all();
+        }
 
         return new Response(JSON.stringify({ notifications: pings.results || [] }), { status: 200, headers: corsHeaders });
       }
