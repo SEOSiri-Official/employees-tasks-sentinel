@@ -71,6 +71,23 @@ export default {
         }), { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
+      
+      // =====================================================================
+      // WHITE-LABEL DIRECT NATIVE BINARY DOWNLOADS (ZERO GITHUB EXPOSURE)
+      // =====================================================================
+      if (url.pathname === "/v1/download/windows") {
+        return Response.redirect("https://github.com/SEOSiri-Official/employees-tasks-desktop/releases/download/v2.0.0/SEOSiriTaskSentinel_2.0.0_x64_en-US.msi", 302);
+      }
+      if (url.pathname === "/v1/download/windows-exe") {
+        return Response.redirect("https://github.com/SEOSiri-Official/employees-tasks-desktop/releases/download/v2.0.0/SEOSiriTaskSentinel_2.0.0_x64-setup.exe", 302);
+      }
+      if (url.pathname === "/v1/download/mac") {
+        return Response.redirect("https://github.com/SEOSiri-Official/employees-tasks-desktop/releases/download/v2.0.0/SEOSiriTaskSentinel_2.0.0_aarch64.dmg", 302);
+      }
+      if (url.pathname === "/v1/download/linux") {
+        return Response.redirect("https://github.com/SEOSiri-Official/employees-tasks-desktop/releases/download/v2.0.0/seosiri-task-sentinel_2.0.0_amd64.deb", 302);
+      }
+
       // Inbound Jira Webhook
       if (url.pathname === "/v1/webhooks/jira" && request.method === "POST") {
         const payload = await request.json();
