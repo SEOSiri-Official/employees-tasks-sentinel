@@ -1,3 +1,7 @@
+import { handleSalesforceWebhook } from "./integrations/salesforce.js";
+import { handleHubspotWebhook } from "./integrations/hubspot.js";
+import { handleAsanaWebhook } from "./integrations/asana.js";
+import { handleServiceNowWebhook } from "./integrations/servicenow.js";
 // employees-tasks-sentinel - Enterprise Multi-Tenant Task Orchestration & Telemetry Gateway
 
 function getCorsHeaders(request) {
@@ -112,6 +116,38 @@ export default {
 
         return new Response(JSON.stringify({ status: "JIRA_SYNCED", issueKey }), { status: 200, headers: corsHeaders });
       }
+
+      // =====================================================================
+      // SEOSIRI ENTERPRISE INGESTION MATRIX WEBHOOKS
+      // =====================================================================
+      if (url.pathname === "/v1/webhooks/salesforce" && request.method === "POST") {
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const dept = url.searchParams.get("dept") || "OPS";
+        const res = await handleSalesforceWebhook(request, env, tenantId, dept);
+        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+      }
+
+      if (url.pathname === "/v1/webhooks/hubspot" && request.method === "POST") {
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const dept = url.searchParams.get("dept") || "GROWTH";
+        const res = await handleHubspotWebhook(request, env, tenantId, dept);
+        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+      }
+
+      if (url.pathname === "/v1/webhooks/asana" && request.method === "POST") {
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const dept = url.searchParams.get("dept") || "OPERATIONS";
+        const res = await handleAsanaWebhook(request, env, tenantId, dept);
+        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+      }
+
+      if (url.pathname === "/v1/webhooks/servicenow" && request.method === "POST") {
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const dept = url.searchParams.get("dept") || "INFRA";
+        const res = await handleServiceNowWebhook(request, env, tenantId, dept);
+        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+      }
+
 
       // Authentication Guard
       const rawId = request.headers.get("X-Employee-ID");
