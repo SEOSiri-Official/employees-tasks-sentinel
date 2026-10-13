@@ -2,15 +2,22 @@ export async function handleSalesforceWebhook(request, env, tenantId, defaultDep
   try {
     const payload = await request.json();
     const caseId = payload.Id || payload.caseNumber || `SF-${Date.now().toString().slice(-6)}`;
-    const subject = payload.Subject || payload.subject || "Salesforce Enterprise Case";
-    const status = (payload.Status || payload.status || "New").toUpperCase();
-    const priority = (payload.Priority || payload.priority || "MEDIUM").toUpperCase();
+    const subject = payload.Subject || payload.subject || "Salesforce Enterprise Task";
+    const status = String(payload.Status || payload.status || "New").toUpperCase();
+    const rawPriority = String(payload.Priority || payload.priority || "MEDIUM").toUpperCase();
     const assigneeEmail = payload.ContactEmail || payload.ownerEmail || "";
+
+    // Normalize Priority to match D1 CHECK constraint: ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
+    let priority = "MEDIUM";
+    if (rawPriority === "CRITICAL" || rawPriority.includes("URGENT") || rawPriority.includes("P1")) priority = "CRITICAL";
+    else if (rawPriority === "HIGH" || rawPriority.includes("P2")) priority = "HIGH";
+    else if (rawPriority === "LOW" || rawPriority.includes("P4")) priority = "LOW";
+    else priority = "MEDIUM"; // Maps "NORMAL", "MODERATE", etc.
 
     let sentinelStatus = "PENDING";
     if (status.includes("PROGRESS") || status.includes("WORKING")) sentinelStatus = "PROGRESS";
-    else if (status.includes("CLOSED") || status.includes("RESOLVED")) sentinelStatus = "COMPLETE";
-    else if (priority === "CRITICAL" || priority === "HIGH") sentinelStatus = "URGENT";
+    else if (status.includes("CLOSED") || status.includes("RESOLVED") || status.includes("COMPLETED")) sentinelStatus = "COMPLETE";
+    else if (priority === "CRITICAL") sentinelStatus = "URGENT";
 
     let targetAssignee = "ETM-AG-EMP-R62";
     let targetDept = defaultDept;

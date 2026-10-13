@@ -1,7 +1,6 @@
 export async function handleHubspotWebhook(request, env, tenantId, defaultDept = "GROWTH") {
   try {
     const rawPayload = await request.json();
-    // HubSpot sends an array of events: [ { objectId, propertyName, propertyValue, ... } ]
     const events = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
 
     for (const item of events) {
@@ -9,7 +8,13 @@ export async function handleHubspotWebhook(request, env, tenantId, defaultDept =
       const properties = item.properties || {};
       const subject = properties.subject?.value || properties.ticketName || item.subject || `HubSpot Ticket #${ticketId}`;
       const stage = String(properties.hs_pipeline_stage?.value || item.propertyValue || item.stage || "OPEN").toUpperCase();
-      const priority = String(properties.hs_ticket_priority?.value || item.priority || "HIGH").toUpperCase();
+      const rawPriority = String(properties.hs_ticket_priority?.value || item.priority || "HIGH").toUpperCase();
+
+      // Normalize Priority
+      let priority = "HIGH";
+      if (rawPriority === "CRITICAL" || rawPriority.includes("URGENT")) priority = "CRITICAL";
+      else if (rawPriority === "LOW") priority = "LOW";
+      else if (rawPriority === "MEDIUM" || rawPriority === "NORMAL") priority = "MEDIUM";
 
       let sentinelStatus = "PROGRESS";
       if (stage.includes("CLOSED") || stage.includes("RESOLVED") || stage.includes("WON")) sentinelStatus = "COMPLETE";
