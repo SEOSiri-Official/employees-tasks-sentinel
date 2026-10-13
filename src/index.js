@@ -137,8 +137,7 @@ export default {
       if (url.pathname === "/v1/webhooks/asana" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
         const dept = url.searchParams.get("dept") || "OPERATIONS";
-        const res = await handleAsanaWebhook(request, env, tenantId, dept);
-        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+        return await handleAsanaWebhook(request, env, tenantId, dept, corsHeaders);
       }
 
       if (url.pathname === "/v1/webhooks/servicenow" && request.method === "POST") {
