@@ -1,78 +1,48 @@
 export async function handleAsanaWebhook(request, env, tenantId, defaultDept = "OPERATIONS", corsHeaders = {}) {
-  // 1. Asana Webhook Handshake Verification
-  const hookSecret = request.headers.get("X-Hook-Secret") || request.headers.get("x-hook-secret");
-  
+  // 1. Asana Webhook Handshake Verification (X-Hook-Secret)
+  const hookSecret = request.headers.get("X-Hook-Secret");
   if (hookSecret) {
     return new Response(null, {
       status: 200,
       headers: {
         "X-Hook-Secret": hookSecret,
-        "Access-Control-Expose-Headers": "X-Hook-Secret",
         ...corsHeaders
       }
     });
   }
 
-  // 2. Process Incoming Asana Events
+  // 2. Real Inbound Asana Event Processing
   try {
     const payload = await request.json();
-    const events = payload.events || (Array.isArray(payload) ? payload : [payload]);
-
+    const events = payload.events || [payload];
+    
     for (const ev of events) {
-      // Extract task GID from Asana resource object or root data
-      const asanaGid = ev.resource?.gid || ev.data?.gid || ev.gid || `ASANA-${Date.now().toString().slice(-6)}`;
-      let taskName = ev.name || ev.data?.name || "Asana Task Activity";
-      let completed = ev.completed || ev.data?.completed || false;
-      let assigneeEmail = "";
-
-      // If token is available and we have a task GID, fetch task details from Asana
-      const asanaToken = env.ASANA_API_TOKEN || "";
-      if (asanaToken && asanaGid && !asanaGid.startsWith("ASANA-")) {
-        try {
-          const asanaRes = await fetch(`https://app.asana.com/api/1.0/tasks/${asanaGid}?opt_fields=name,completed,assignee.email`, {
-            headers: { "Authorization": `Bearer ${asanaToken}`, "Accept": "application/json" }
-          });
-          if (asanaRes.ok) {
-            const asanaJson = await asanaRes.json();
-            if (asanaJson.data) {
-              taskName = asanaJson.data.name || taskName;
-              completed = asanaJson.data.completed || false;
-              assigneeEmail = asanaJson.data.assignee?.email || "";
-            }
-          }
-        } catch (fetchErr) {
-          // Graceful fallback to default title
-        }
-      }
-
-      let targetAssignee = "ETM-AG-EMP-R62";
-      if (assigneeEmail) {
-        const emp = await env.DB.prepare(
-          "SELECT employee_id FROM employees WHERE tenant_id = ? AND LOWER(email) = LOWER(?)"
-        ).bind(tenantId, assigneeEmail).first();
-        if (emp) targetAssignee = emp.employee_id;
-      }
+      // In real Asana webhooks, task data is inside ev.resource
+      const resource = ev.resource || ev.data || ev;
+      const asanaGid = resource.gid || `ASANA-${Date.now().toString().slice(-6)}`;
+      const action = ev.action || "created";
+      const taskName = resource.name || `Asana Task #${asanaGid.slice(-6)}`;
+      const completed = action === "completed" || resource.completed || false;
 
       let sentinelStatus = completed ? "COMPLETE" : "PROGRESS";
       const taskTitle = `[Asana] ${taskName}`;
 
       await env.DB.prepare(`
         INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
-        VALUES (?, ?, ?, ?, ?, 'MEDIUM', ?, 'ASANA_GATEWAY', 'ASANA')
+        VALUES (?, ?, ?, 'ETM-AG-EMP-R62', ?, 'MEDIUM', ?, 'ASANA_GATEWAY', 'ASANA')
         ON CONFLICT(task_id) DO UPDATE SET 
-          title = excluded.title, 
           status = excluded.status,
           updated_at = CURRENT_TIMESTAMP
-      `).bind(String(asanaGid), tenantId, defaultDept, targetAssignee, taskTitle, sentinelStatus).run();
+      `).bind(String(asanaGid), tenantId, defaultDept, taskTitle, sentinelStatus).run();
     }
 
-    return new Response(JSON.stringify({ status: "ASANA_SYNCED" }), {
+    return new Response(JSON.stringify({ status: "ASANA_SYNCED", count: events.length }), {
       status: 200,
       headers: { "Content-Type": "application/json", ...corsHeaders }
     });
   } catch (err) {
-    return new Response(JSON.stringify({ status: "EVENT_RECEIVED", note: err.message }), {
-      status: 200,
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
       headers: { "Content-Type": "application/json", ...corsHeaders }
     });
   }
