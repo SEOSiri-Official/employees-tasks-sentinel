@@ -1,3 +1,4 @@
+import { syncHubspotTasksFromApi } from "./integrations/hubspot_pull.js";
 import { handleSalesforceWebhook } from "./integrations/salesforce.js";
 import { handleHubspotWebhook } from "./integrations/hubspot.js";
 import { handleAsanaWebhook } from "./integrations/asana.js";
@@ -156,6 +157,15 @@ export default {
           status: 401,
           headers: { "Content-Type": "application/json", ...corsHeaders }
         });
+      }
+
+            // HUBSPOT ACTIVE CRM TASK SYNC ROUTE
+      if (url.pathname === "/v1/sync/hubspot" && request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const token = body.token || url.searchParams.get("token") || env.HUBSPOT_ACCESS_TOKEN;
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const res = await syncHubspotTasksFromApi(env, tenantId, token);
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }
 
       // 1. EMPLOYEES DIRECTORY
