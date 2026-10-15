@@ -511,7 +511,7 @@ export default {
         const taskId = body.taskId;
 
         if (taskId) {
-          // Copy to archived_tasks and delete from tasks
+          // Copy to archived_tasks, clear child foreign keys, then delete from active tasks
           const t = await env.DB.prepare("SELECT * FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).first();
           if (t) {
             await env.DB.prepare(`
@@ -519,16 +519,22 @@ export default {
               VALUES (?, ?, ?, ?, ?, ?, ?)
             `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
 
+            // Clear child foreign key dependencies to prevent SQLite constraint failure
+            await env.DB.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(taskId).run();
+            await env.DB.prepare("DELETE FROM task_telemetry WHERE task_id = ?").bind(taskId).run();
             await env.DB.prepare("DELETE FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).run();
           }
         } else {
-          // Archive all completed tasks
+          // Archive all completed tasks with cascading child deletion
           const completedList = await env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).all();
           for (const t of (completedList.results || [])) {
             await env.DB.prepare(`
               INSERT OR REPLACE INTO archived_tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, source)
               VALUES (?, ?, ?, ?, ?, ?, ?)
             `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
+
+            await env.DB.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(t.task_id).run();
+            await env.DB.prepare("DELETE FROM task_telemetry WHERE task_id = ?").bind(t.task_id).run();
           }
           await env.DB.prepare("DELETE FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).run();
         }
