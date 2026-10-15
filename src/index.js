@@ -57,6 +57,14 @@ function parseEmployeeId(rawId) {
 }
 
 export default {
+  
+  // 100% AUTONOMOUS BACKGROUND ENGINE (Zero user commands required)
+  async scheduled(event, env, ctx) {
+    if (env.HUBSPOT_ACCESS_TOKEN) {
+      ctx.waitUntil(syncHubspotTasksFromApi(env, "ETM", env.HUBSPOT_ACCESS_TOKEN));
+    }
+  },
+
   async fetch(request, env, ctx) {
     const corsHeaders = getCorsHeaders(request);
 
@@ -148,6 +156,15 @@ export default {
         return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
       }
 
+
+            // HUBSPOT ACTIVE CRM TASK SYNC ROUTE (Authenticated by HubSpot Token)
+      if (url.pathname === "/v1/sync/hubspot" && request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const token = body.token || url.searchParams.get("token") || env.HUBSPOT_ACCESS_TOKEN;
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const res = await syncHubspotTasksFromApi(env, tenantId, token);
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
+      }
 
       // Authentication Guard
       const rawId = request.headers.get("X-Employee-ID");
