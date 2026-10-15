@@ -373,34 +373,72 @@ export default {
         }
 
         
-        // Outbound Jira Transition Sync
-        if (newStatus === "COMPLETE" && env.JIRA_BASE_URL && env.JIRA_API_TOKEN) {
+        // UNIVERSAL MULTI-PLATFORM OUTBOUND RESOLUTION SYNC
+        if (newStatus === "COMPLETE") {
           const taskRecord = await env.DB.prepare("SELECT source, task_id FROM tasks WHERE task_id = ?").bind(taskId).first();
-          if (taskRecord && taskRecord.source === "JIRA") {
+          if (taskRecord) {
             ctx.waitUntil((async () => {
               try {
-                const authHeader = "Basic " + btoa(`${env.JIRA_USER_EMAIL}:${env.JIRA_API_TOKEN}`);
-                // 1. Get transitions for the issue
-                const transRes = await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
-                  headers: { "Authorization": authHeader, "Accept": "application/json" }
-                });
-                if (transRes.ok) {
-                  const transData = await transRes.json();
-                  const doneTrans = transData.transitions?.find(t => 
-                    t.name.toLowerCase().includes("done") || 
-                    t.name.toLowerCase().includes("complete") || 
-                    t.name.toLowerCase().includes("resolved")
-                  );
-                  if (doneTrans) {
-                    await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
-                      method: "POST",
-                      headers: { "Authorization": authHeader, "Content-Type": "application/json" },
-                      body: JSON.stringify({ transition: { id: doneTrans.id } })
-                    });
+                // 1. Atlassian Jira Cloud
+                if (taskRecord.source === "JIRA" && env.JIRA_BASE_URL && env.JIRA_API_TOKEN) {
+                  const authHeader = "Basic " + btoa(`${env.JIRA_USER_EMAIL}:${env.JIRA_API_TOKEN}`);
+                  const transRes = await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                    headers: { "Authorization": authHeader, "Accept": "application/json" }
+                  });
+                  if (transRes.ok) {
+                    const transData = await transRes.json();
+                    const doneTrans = transData.transitions?.find(t => 
+                      t.name.toLowerCase().includes("done") || t.name.toLowerCase().includes("complete") || t.name.toLowerCase().includes("resolved")
+                    );
+                    if (doneTrans) {
+                      await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                        method: "POST",
+                        headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+                        body: JSON.stringify({ transition: { id: doneTrans.id } })
+                      });
+                    }
                   }
                 }
-              } catch (e) {
-                console.error("Jira outbound sync failed", e);
+
+                // 2. HubSpot CRM Tasks / Tickets
+                if (taskRecord.source === "HUBSPOT" && env.HUBSPOT_ACCESS_TOKEN) {
+                  await fetch(`https://api.hubapi.com/crm/v3/objects/tasks/${taskId}`, {
+                    method: "PATCH",
+                    headers: {
+                      "Authorization": `Bearer ${env.HUBSPOT_ACCESS_TOKEN}`,
+                      "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ properties: { hs_task_status: "COMPLETED" } })
+                  });
+                }
+
+                // 3. Asana Operations Tasks
+                if (taskRecord.source === "ASANA" && env.ASANA_ACCESS_TOKEN) {
+                  await fetch(`https://app.asana.com/api/1.0/tasks/${taskId}`, {
+                    method: "PUT",
+                    headers: {
+                      "Authorization": `Bearer ${env.ASANA_ACCESS_TOKEN}`,
+                      "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ data: { completed: true } })
+                  });
+                }
+
+                // 4. ServiceNow Incident Resolution
+                if (taskRecord.source === "SERVICENOW" && env.SERVICENOW_INSTANCE && env.SERVICENOW_PASSWORD) {
+                  const snowAuth = "Basic " + btoa(`${env.SERVICENOW_USER || "admin"}:${env.SERVICENOW_PASSWORD}`);
+                  await fetch(`https://${env.SERVICENOW_INSTANCE}.service-now.com/api/now/table/incident/${taskId}`, {
+                    method: "PATCH",
+                    headers: {
+                      "Authorization": snowAuth,
+                      "Content-Type": "application/json",
+                      "Accept": "application/json"
+                    },
+                    body: JSON.stringify({ state: "6", close_notes: "Resolved via SEOSiri Task Sentinel" })
+                  });
+                }
+              } catch (outboundErr) {
+                console.error("Outbound platform sync exception:", outboundErr);
               }
             })());
           }
