@@ -323,7 +323,8 @@ export default {
         `).bind(taskId, identity.tenantId, deptId, assignedTo, title, priority, status, identity.normalizedId).run();
 
         // Always notify assigned employee (Urgent or Standard)
-        const notifType = isUrgent ? 'URGENT' : 'ASSIGNMENT';
+        // Strictly match D1 CHECK constraint: ('URGENT_TASK', 'DEADLINE_ALERT', 'BLOCKER_ESCALATION', 'SUMMARY_DIGEST')
+        const notifType = isUrgent ? 'URGENT_TASK' : 'DEADLINE_ALERT';
         const notifTitle = isUrgent ? 'CRITICAL: Urgent Task Assigned' : 'New Task Assigned to Your Queue';
         await env.DB.prepare(`
           INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message)
@@ -368,7 +369,7 @@ export default {
 
         if (blockerReason) {
           await env.DB.prepare(
-            "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, 'ADMIN', 'BLOCKER', 'Task Blocked', ?)"
+            "INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message) VALUES (?, ?, 'ADMIN', 'BLOCKER_ESCALATION', 'Task Blocked', ?)"
           ).bind(crypto.randomUUID(), identity.tenantId, blockerReason).run();
         }
 
@@ -503,26 +504,41 @@ export default {
 
             
       // =====================================================================
-      // 13. TASK ARCHIVING ENGINE
+      // 13. TASK ARCHIVING ENGINE (PRESERVES tasks.status SCHEMA CHECK)
       // =====================================================================
       if (url.pathname === "/v1/tasks/archive" && request.method === "POST") {
-        const { taskId } = await request.json();
+        const body = await request.json().catch(() => ({}));
+        const taskId = body.taskId;
+
         if (taskId) {
-          await env.DB.prepare(
-            "UPDATE tasks SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
-          ).bind(taskId, identity.tenantId).run();
+          // Copy to archived_tasks and delete from tasks
+          const t = await env.DB.prepare("SELECT * FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).first();
+          if (t) {
+            await env.DB.prepare(`
+              INSERT OR REPLACE INTO archived_tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, source)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
+
+            await env.DB.prepare("DELETE FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).run();
+          }
         } else {
           // Archive all completed tasks
-          await env.DB.prepare(
-            "UPDATE tasks SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND status = 'COMPLETE'"
-          ).bind(identity.tenantId).run();
+          const completedList = await env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).all();
+          for (const t of (completedList.results || [])) {
+            await env.DB.prepare(`
+              INSERT OR REPLACE INTO archived_tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, source)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
+          }
+          await env.DB.prepare("DELETE FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).run();
         }
+
         return new Response(JSON.stringify({ status: "ARCHIVED_SUCCESSFULLY" }), { status: 200, headers: corsHeaders });
       }
 
       if (url.pathname === "/v1/tasks/archived" && request.method === "GET") {
         const archived = await env.DB.prepare(
-          "SELECT * FROM tasks WHERE tenant_id = ? AND status = 'ARCHIVED' ORDER BY updated_at DESC LIMIT 50"
+          "SELECT * FROM archived_tasks WHERE tenant_id = ? ORDER BY archived_at DESC LIMIT 50"
         ).bind(identity.tenantId).all();
         return new Response(JSON.stringify({ tasks: archived.results || [] }), { status: 200, headers: corsHeaders });
       }
