@@ -1,3 +1,22 @@
+
+function normalizeUniversalPriority(raw) {
+  if (!raw) return "MEDIUM";
+  const p = String(raw).trim().toUpperCase();
+  if (p === "HIGHEST" || p === "CRITICAL" || p === "P1" || p === "URGENT" || p === "BLOCKER" || p === "1") return "CRITICAL";
+  if (p === "HIGH" || p === "P2" || p === "MAJOR" || p === "2") return "HIGH";
+  if (p === "LOW" || p === "LOWEST" || p === "P4" || p === "P5" || p === "MINOR" || p === "TRIVIAL" || p === "INFORMATIONAL" || p === "4" || p === "5") return "LOW";
+  return "MEDIUM"; // Standard fallback for "Normal", "Moderate", "3", or anything unknown
+}
+
+function normalizeUniversalStatus(rawStatus) {
+  if (!rawStatus) return "PENDING";
+  const s = String(rawStatus).trim().toUpperCase();
+  if (s.includes("PROGRESS") || s.includes("WORKING") || s.includes("ACTIVE") || s.includes("STARTED")) return "PROGRESS";
+  if (s.includes("DONE") || s.includes("RESOLVED") || s.includes("CLOSED") || s.includes("COMPLETED")) return "COMPLETE";
+  if (s.includes("URGENT") || s.includes("EMERGENCY")) return "URGENT";
+  return "PENDING"; // Default for "To Do", "Open", "New", "Backlog", "Waiting"
+}
+
 import { syncHubspotTasksFromApi } from "./integrations/hubspot_pull.js";
 import { handleSalesforceWebhook } from "./integrations/salesforce.js";
 import { handleHubspotWebhook } from "./integrations/hubspot.js";
