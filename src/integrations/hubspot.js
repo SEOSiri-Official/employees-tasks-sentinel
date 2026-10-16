@@ -14,7 +14,7 @@ export async function handleHubspotWebhook(request, env, tenantId, defaultDept =
 
       const ownerName = properties.hubspot_owner_id?.label || properties.ticket_owner_name || null;
       const ownerEmail = properties.ticket_owner_email || null;
-      const assigneeInfo = await resolveAssignee(env, tenantId, ownerName, ownerEmail);
+      const assigneeInfo = await resolveAssignee(env, tenantId, ownerName, ownerEmail, defaultDept);
 
       const taskTitle = `[HubSpot HS-${ticketId}] ${subject}`;
       const description = properties.content?.value || item.description || "";

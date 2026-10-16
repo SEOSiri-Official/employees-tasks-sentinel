@@ -9,7 +9,7 @@ export async function handleServiceNowWebhook(request, env, tenantId, defaultDep
     const status = normalizeStatus(payload.state || payload.incident_state);
 
     const rawAssignee = payload.assigned_to_name || payload.assigned_to || payload.caller_id || null;
-    const assigneeInfo = await resolveAssignee(env, tenantId, rawAssignee, payload.assigned_to_email);
+    const assigneeInfo = await resolveAssignee(env, tenantId, rawAssignee, payload.assigned_to_email, defaultDept);
 
     const taskTitle = `[ServiceNow ${incNumber}] ${summary}`;
     const description = payload.description || payload.close_notes || "";

@@ -15,7 +15,8 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
     const assigneeInfo = await resolveAssignee(
       env, tenantId,
       issue.fields?.assignee?.displayName,
-      issue.fields?.assignee?.emailAddress
+      issue.fields?.assignee?.emailAddress,
+      targetDept
     );
 
     const labelsArray = Array.isArray(issue.fields?.labels) ? issue.fields.labels : [];
@@ -27,7 +28,13 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
     if (typeof issue.fields?.description === "string") {
       description = issue.fields.description;
     } else if (issue.fields?.description?.content) {
-      try { description = JSON.stringify(issue.fields.description); } catch (e) {}
+      try {
+        description = issue.fields.description.content
+          .map(c => c.content ? c.content.map(n => n.text || "").join("") : "")
+          .join("\n");
+      } catch (e) {
+        description = "Atlassian Document Format";
+      }
     }
 
     const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toISOString() : null;

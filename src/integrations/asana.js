@@ -18,7 +18,7 @@ export async function handleAsanaWebhook(request, env, tenantId, defaultDept = "
       const status = completed ? "COMPLETE" : "PROGRESS";
       const priority = normalizePriority(resource.priority);
 
-      const assigneeInfo = await resolveAssignee(env, tenantId, resource.assignee?.name, resource.assignee?.email);
+      const assigneeInfo = await resolveAssignee(env, tenantId, resource.assignee?.name, resource.assignee?.email, defaultDept);
       const dueDate = resource.due_on ? new Date(resource.due_on).toISOString() : null;
       const description = resource.notes || "";
       const taskTitle = `[Asana] ${taskName}`;
