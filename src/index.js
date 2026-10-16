@@ -273,6 +273,60 @@ export default {
           "UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
         ).bind(newStatus, taskId, identity.tenantId).run();
 
+        // =====================================================================
+        // UNIVERSAL OUTBOUND BIDIRECTIONAL SYNC (SENTINEL -> EXTERNAL PLATFORMS)
+        // =====================================================================
+        if (newStatus === "COMPLETE") {
+          const taskObj = await env.DB.prepare("SELECT source, title FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).first();
+          if (taskObj) {
+            ctx.waitUntil((async () => {
+              try {
+                // 1. HUBSPOT OUTBOUND SYNC
+                if (taskObj.source === "HUBSPOT" && env.HUBSPOT_ACCESS_TOKEN) {
+                  const hsId = taskId.replace("HS-", "");
+                  await fetch(`https://api.hubapi.com/crm/v3/objects/tasks/${hsId}`, {
+                    method: "PATCH",
+                    headers: { "Authorization": `Bearer ${env.HUBSPOT_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+                    body: JSON.stringify({ properties: { hs_task_status: "COMPLETED" } })
+                  });
+                }
+                // 2. ASANA OUTBOUND SYNC
+                else if (taskObj.source === "ASANA") {
+                  // Asana task update via PAT if stored in env
+                  if (env.ASANA_PAT) {
+                    await fetch(`https://app.asana.com/api/1.0/tasks/${taskId}`, {
+                      method: "PUT",
+                      headers: { "Authorization": `Bearer ${env.ASANA_PAT}`, "Content-Type": "application/json" },
+                      body: JSON.stringify({ data: { completed: true } })
+                    });
+                  }
+                }
+                // 3. JIRA OUTBOUND SYNC
+                else if (taskObj.source === "JIRA" && env.JIRA_BASE_URL && env.JIRA_API_TOKEN) {
+                  const authHeader = "Basic " + btoa(`${env.JIRA_USER_EMAIL}:${env.JIRA_API_TOKEN}`);
+                  const transRes = await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                    headers: { "Authorization": authHeader, "Accept": "application/json" }
+                  });
+                  if (transRes.ok) {
+                    const transData = await transRes.json();
+                    const doneTrans = transData.transitions?.find(t => t.name.toLowerCase().includes("done") || t.name.toLowerCase().includes("complete") || t.name.toLowerCase().includes("resolved"));
+                    if (doneTrans) {
+                      await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
+                        method: "POST",
+                        headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+                        body: JSON.stringify({ transition: { id: doneTrans.id } })
+                      });
+                    }
+                  }
+                }
+              } catch (outboundErr) {
+                console.error("Outbound bidirectional sync error:", outboundErr);
+              }
+            })());
+          }
+        }
+
+
         await env.DB.prepare(
           "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason) VALUES (?, ?, ?, ?, 'PROGRESS', ?, ?)"
         ).bind(crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, newStatus, blockerReason || null).run();
