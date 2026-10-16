@@ -7,18 +7,17 @@ import { handleAsanaWebhook } from "./integrations/asana.js";
 import { handleServiceNowWebhook } from "./integrations/servicenow.js";
 
 function getCorsHeaders(request) {
-  const origin = request.headers.get("Origin") || "";
+  const origin = request.headers.get('Origin') || '';
   const allowed = [
-    "https://board.seosiri.com",
-    "https://employees-tasks-board.pages.dev",
-    "https://developers.seosiri.com"
+    'https://board.seosiri.com',
+    'https://employees-tasks-board.pages.dev'
   ];
-  const matchedOrigin = allowed.includes(origin) ? origin : "https://board.seosiri.com";
+  const matchedOrigin = allowed.includes(origin) ? origin : 'https://board.seosiri.com';
 
   return {
-    "Access-Control-Allow-Origin": matchedOrigin,
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Employee-ID, X-SEOSiri-Token",
+    'Access-Control-Allow-Origin': matchedOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Employee-ID, X-SEOSiri-Token',
   };
 }
 
