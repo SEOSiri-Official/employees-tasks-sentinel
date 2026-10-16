@@ -29,7 +29,7 @@ export async function handleSalesforceWebhook(request, env, tenantId, defaultDep
         updated_at = CURRENT_TIMESTAMP
     `).bind(caseId, tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
 
-    return { status: "SALESFORCE_SYNCED", caseId, taskTitle, priority, status, assignee: assigneeInfo.name };
+    return { status: "SALESFORCE_SYNCED", caseId, taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
   } catch (err) {
     return { error: err.message };
   }

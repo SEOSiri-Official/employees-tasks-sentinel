@@ -46,7 +46,7 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
         updated_at = CURRENT_TIMESTAMP
     `).bind(issueKey, tenantId, targetDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
 
-    return { status: "JIRA_SYNCED", issueKey, title: taskTitle, priority, status, assignee: assigneeInfo.name };
+    return { status: "JIRA_SYNCED", issueKey, title: taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
   } catch (err) {
     return { error: err.message };
   }

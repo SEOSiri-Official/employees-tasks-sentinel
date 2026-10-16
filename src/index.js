@@ -435,9 +435,10 @@ export default {
       return new Response(JSON.stringify({ error: "ENDPOINT_NOT_FOUND" }), { status: 404, headers: corsHeaders });
 
     } catch (fatalError) {
+      console.error("[INTERNAL_ERROR]", fatalError);
       return new Response(JSON.stringify({
         error: "INTERNAL_GATEWAY_ERROR",
-        message: fatalError.message
+        message: "An internal edge error occurred. Incident has been logged to Cloudflare telemetry."
       }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...corsHeaders }

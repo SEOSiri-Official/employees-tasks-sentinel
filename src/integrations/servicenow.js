@@ -26,7 +26,7 @@ export async function handleServiceNowWebhook(request, env, tenantId, defaultDep
         updated_at = CURRENT_TIMESTAMP
     `).bind(incNumber, tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status).run();
 
-    return { status: "SERVICENOW_SYNCED", incNumber, taskTitle, priority, status, assignee: assigneeInfo.name };
+    return { status: "SERVICENOW_SYNCED", incNumber, taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
   } catch (err) {
     return { error: err.message };
   }
