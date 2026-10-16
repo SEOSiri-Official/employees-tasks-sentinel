@@ -3,9 +3,7 @@
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "";
   const allowed = [
-    "https://board.seosiri.com",
-    "https://employees-tasks-board.pages.dev",
-    "https://developers.seosiri.com"
+    "https://board.seosiri.com"
   ];
   const matchedOrigin = allowed.includes(origin) ? origin : "https://board.seosiri.com";
 
