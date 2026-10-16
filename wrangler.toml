@@ -7,10 +7,13 @@ routes = [
   { pattern = "tasks.seosiri.com", custom_domain = true }
 ]
 
+[triggers]
+crons = ["* * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "employees-tasks-db"
 database_id = "cab89191-3936-4e12-9d6b-e7f7e0bd0189"
 
-[triggers]
-crons = ["* * * * *"]
+[vars]
+DEFAULT_JIRA_DOMAIN = "one-atlas-jkdr.atlassian.net"

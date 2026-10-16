@@ -13,18 +13,20 @@ export async function handleServiceNowWebhook(request, env, tenantId, defaultDep
 
     const taskTitle = `[ServiceNow ${incNumber}] ${summary}`;
     const description = payload.description || payload.close_notes || "";
+    const externalUrl = `https://dev195140.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=${incNumber}`;
 
     await env.DB.prepare(`
-      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, created_by, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SERVICENOW_GATEWAY', 'SERVICENOW')
+      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, external_url, created_by, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SERVICENOW_GATEWAY', 'SERVICENOW')
       ON CONFLICT(task_id) DO UPDATE SET 
         title = excluded.title, 
         description = excluded.description,
         status = excluded.status,
         priority = excluded.priority,
         assigned_to = excluded.assigned_to,
+        external_url = excluded.external_url,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(incNumber, tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status).run();
+    `).bind(incNumber, tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, externalUrl).run();
 
     return { status: "SERVICENOW_SYNCED", incNumber, taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
   } catch (err) {

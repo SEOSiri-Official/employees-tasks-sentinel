@@ -1,4 +1,4 @@
-// src/integrations/common.js - Universal Normalizer & Identity Resolver
+// src/integrations/common.js - Universal Normalizer & Identity Engine
 
 export function normalizePriority(raw) {
   if (!raw) return "MEDIUM";
@@ -12,7 +12,7 @@ export function normalizePriority(raw) {
   if (p === "4" || p === "5" || p.includes("LOW") || p.includes("LOWEST") || p.includes("P4") || p.includes("P5") || p.includes("MINOR") || p.includes("TRIVIAL") || p.includes("INFORMATIONAL")) {
     return "LOW";
   }
-  return "MEDIUM"; // Universal default for "Normal", "Moderate", "3", or unlisted strings
+  return "MEDIUM"; // Universal fallback for "Normal", "Moderate", "3", or unlisted strings
 }
 
 export function normalizeStatus(raw) {
@@ -27,7 +27,7 @@ export function normalizeStatus(raw) {
   if (s.includes("URGENT") || s.includes("EMERGENCY")) {
     return "URGENT";
   }
-  return "PENDING"; // Universal default for "To Do", "Open", "New", "Backlog", "Waiting", "On Hold"
+  return "PENDING"; // Universal fallback for "To Do", "Open", "New", "Backlog", "Waiting", "On Hold"
 }
 
 export async function resolveAssignee(env, tenantId, rawAssignee, email) {
@@ -41,7 +41,7 @@ export async function resolveAssignee(env, tenantId, rawAssignee, email) {
     }
   }
 
-  // If no internal record exists, return the platform's real human name or "Unassigned"
+  // Preserve real human name from the external platform or fallback to "Unassigned"
   const displayName = rawAssignee && String(rawAssignee).trim() ? String(rawAssignee).trim() : "Unassigned";
   return { id: displayName, name: displayName, deptId: null };
 }

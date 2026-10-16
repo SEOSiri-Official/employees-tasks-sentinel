@@ -1,12 +1,15 @@
+import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
+
 export async function syncHubspotTasksFromApi(env, tenantId, accessToken, defaultDept = "GROWTH") {
-  if (!accessToken) {
+  const token = accessToken || env.HUBSPOT_ACCESS_TOKEN;
+  if (!token) {
     return { error: "HUBSPOT_TOKEN_REQUIRED", message: "Private App Access Token is required." };
   }
 
   try {
-    const res = await fetch("https://api.hubapi.com/crm/v3/objects/tasks?limit=50&properties=hs_task_subject,hs_task_status,hs_task_priority,hubspot_owner_id", {
+    const res = await fetch("https://api.hubapi.com/crm/v3/objects/tasks?limit=50&properties=hs_task_subject,hs_task_status,hs_task_priority,hubspot_owner_id,hs_task_body,hs_timestamp", {
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json"
       }
     });
@@ -22,40 +25,35 @@ export async function syncHubspotTasksFromApi(env, tenantId, accessToken, defaul
     for (const t of tasks) {
       const props = t.properties || {};
       const subject = props.hs_task_subject || "HubSpot Task";
-      const statusRaw = String(props.hs_task_status || "NOT_STARTED").toUpperCase();
-      const priorityRaw = String(props.hs_task_priority || "MEDIUM").toUpperCase();
+      const status = normalizeStatus(props.hs_task_status);
+      const priority = normalizePriority(props.hs_task_priority);
 
-      // Normalize Priority
-      let priority = "MEDIUM";
-      if (priorityRaw.includes("HIGH") || priorityRaw.includes("URGENT")) priority = "HIGH";
-      else if (priorityRaw.includes("LOW")) priority = "LOW";
-
-      // Normalize Status
-      let status = "PROGRESS";
-      if (statusRaw.includes("COMPLETED")) status = "COMPLETE";
-      else if (statusRaw.includes("WAITING")) status = "PENDING";
-
-      // Clean Assignee Resolution - NEVER hardcode internal test IDs
       const rawOwner = props.hubspot_owner_id;
-      const targetAssignee = rawOwner ? `Owner #${rawOwner}` : "Unassigned";
+      const assigneeInfo = await resolveAssignee(env, tenantId, rawOwner ? `Owner #${rawOwner}` : "Unassigned", null);
 
       const taskTitle = `[HubSpot HS-${t.id}] ${subject}`;
+      const description = props.hs_task_body || "";
+      const dueDate = props.hs_timestamp ? new Date(props.hs_timestamp).toISOString() : null;
+      const externalUrl = `https://app.hubspot.com/contacts/3271531/objects/0-27/views/all/list`;
 
       await env.DB.prepare(`
-        INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'HUBSPOT_API', 'HUBSPOT')
+        INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, external_url, created_by, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'HUBSPOT_API', 'HUBSPOT')
         ON CONFLICT(task_id) DO UPDATE SET 
           title = excluded.title, 
+          description = excluded.description,
           status = excluded.status,
           priority = excluded.priority,
           assigned_to = excluded.assigned_to,
+          deadline = excluded.deadline,
+          external_url = excluded.external_url,
           updated_at = CURRENT_TIMESTAMP
-      `).bind(String(t.id), tenantId, defaultDept, targetAssignee, taskTitle, priority, status).run();
+      `).bind(String(t.id), tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate, externalUrl).run();
 
       syncedCount++;
     }
 
-    return { status: "HUBSPOT_TASKS_SYNCED", synced_count: syncedCount, tasks_found: tasks.length };
+    return { status: "HUBSPOT_TASKS_SYNCED", syncedCount, tasksFound: tasks.length };
   } catch (err) {
     return { error: err.message };
   }

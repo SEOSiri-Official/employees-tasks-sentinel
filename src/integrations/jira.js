@@ -18,10 +18,10 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
       issue.fields?.assignee?.emailAddress
     );
 
-    const labels = Array.isArray(issue.fields?.labels) && issue.fields.labels.length > 0
-      ? ` [${issue.fields.labels.join(", ")}]`
-      : "";
-    const taskTitle = `[Jira ${issueKey}]${labels} ${summary}`;
+    const labelsArray = Array.isArray(issue.fields?.labels) ? issue.fields.labels : [];
+    const labelsStr = labelsArray.join(", ");
+    const labelTag = labelsArray.length > 0 ? ` [${labelsStr}]` : "";
+    const taskTitle = `[Jira ${issueKey}]${labelTag} ${summary}`;
 
     let description = "";
     if (typeof issue.fields?.description === "string") {
@@ -31,10 +31,12 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
     }
 
     const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toISOString() : null;
+    const jiraDomain = env.DEFAULT_JIRA_DOMAIN || "one-atlas-jkdr.atlassian.net";
+    const externalUrl = `https://${jiraDomain}/browse/${issueKey}`;
 
     await env.DB.prepare(`
-      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, created_by, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'JIRA_WEBHOOK', 'JIRA')
+      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, labels, external_url, created_by, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'JIRA_WEBHOOK', 'JIRA')
       ON CONFLICT(task_id) DO UPDATE SET 
         title = excluded.title, 
         description = excluded.description,
@@ -43,8 +45,10 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
         assigned_to = excluded.assigned_to,
         dept_id = excluded.dept_id,
         deadline = excluded.deadline,
+        labels = excluded.labels,
+        external_url = excluded.external_url,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(issueKey, tenantId, targetDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
+    `).bind(issueKey, tenantId, targetDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate, labelsStr, externalUrl).run();
 
     return { status: "JIRA_SYNCED", issueKey, title: taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
   } catch (err) {

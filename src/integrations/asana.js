@@ -22,10 +22,11 @@ export async function handleAsanaWebhook(request, env, tenantId, defaultDept = "
       const dueDate = resource.due_on ? new Date(resource.due_on).toISOString() : null;
       const description = resource.notes || "";
       const taskTitle = `[Asana] ${taskName}`;
+      const externalUrl = `https://app.asana.com/0/0/${asanaGid}`;
 
       await env.DB.prepare(`
-        INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, created_by, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ASANA_GATEWAY', 'ASANA')
+        INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, external_url, created_by, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ASANA_GATEWAY', 'ASANA')
         ON CONFLICT(task_id) DO UPDATE SET 
           title = excluded.title, 
           description = excluded.description,
@@ -33,8 +34,9 @@ export async function handleAsanaWebhook(request, env, tenantId, defaultDept = "
           priority = excluded.priority,
           assigned_to = excluded.assigned_to,
           deadline = excluded.deadline,
+          external_url = excluded.external_url,
           updated_at = CURRENT_TIMESTAMP
-      `).bind(String(asanaGid), tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
+      `).bind(String(asanaGid), tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate, externalUrl).run();
     }
 
     return new Response(JSON.stringify({ status: "ASANA_SYNCED", count: events.length }), {
