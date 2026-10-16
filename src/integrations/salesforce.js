@@ -1,49 +1,35 @@
+import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
+
 export async function handleSalesforceWebhook(request, env, tenantId, defaultDept = "OPS") {
   try {
     const payload = await request.json();
     const caseId = payload.Id || payload.caseNumber || `SF-${Date.now().toString().slice(-6)}`;
-    const subject = payload.Subject || payload.subject || "Salesforce Enterprise Task";
-    const status = String(payload.Status || payload.status || "New").toUpperCase();
-    const rawPriority = String(payload.Priority || payload.priority || "MEDIUM").toUpperCase();
-    const assigneeEmail = payload.ContactEmail || payload.ownerEmail || "";
+    const subject = payload.Subject || payload.subject || "Salesforce Task";
+    const priority = normalizePriority(payload.Priority || payload.priority);
+    const status = normalizeStatus(payload.Status || payload.status);
 
-    // Normalize Priority to match D1 CHECK constraint: ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
-    let priority = "MEDIUM";
-    if (rawPriority === "CRITICAL" || rawPriority.includes("URGENT") || rawPriority.includes("P1")) priority = "CRITICAL";
-    else if (rawPriority === "HIGH" || rawPriority.includes("P2")) priority = "HIGH";
-    else if (rawPriority === "LOW" || rawPriority.includes("P4")) priority = "LOW";
-    else priority = "MEDIUM"; // Maps "NORMAL", "MODERATE", etc.
-
-    let sentinelStatus = "PENDING";
-    if (status.includes("PROGRESS") || status.includes("WORKING")) sentinelStatus = "PROGRESS";
-    else if (status.includes("CLOSED") || status.includes("RESOLVED") || status.includes("COMPLETED")) sentinelStatus = "COMPLETE";
-    else if (priority === "CRITICAL") sentinelStatus = "URGENT";
-
-    let targetAssignee = "ETM-AG-EMP-R62";
-    let targetDept = defaultDept;
-
-    if (assigneeEmail) {
-      const emp = await env.DB.prepare(
-        "SELECT employee_id, dept_id FROM employees WHERE tenant_id = ? AND LOWER(email) = LOWER(?)"
-      ).bind(tenantId, assigneeEmail).first();
-      if (emp) {
-        targetAssignee = emp.employee_id;
-        targetDept = emp.dept_id || defaultDept;
-      }
-    }
+    const rawOwner = payload.ownerName || payload.Owner?.Name || payload.CreatedBy?.Name || null;
+    const ownerEmail = payload.ContactEmail || payload.ownerEmail || null;
+    const assigneeInfo = await resolveAssignee(env, tenantId, rawOwner, ownerEmail);
 
     const taskTitle = `[Salesforce ${caseId}] ${subject}`;
+    const description = payload.Description || payload.description || "";
+    const dueDate = payload.ActivityDate ? new Date(payload.ActivityDate).toISOString() : null;
 
     await env.DB.prepare(`
-      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'SALESFORCE_GATEWAY', 'SALESFORCE')
+      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, created_by, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SALESFORCE_GATEWAY', 'SALESFORCE')
       ON CONFLICT(task_id) DO UPDATE SET 
         title = excluded.title, 
+        description = excluded.description,
         status = excluded.status,
+        priority = excluded.priority,
+        assigned_to = excluded.assigned_to,
+        deadline = excluded.deadline,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(caseId, tenantId, targetDept, targetAssignee, taskTitle, priority, sentinelStatus).run();
+    `).bind(caseId, tenantId, defaultDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
 
-    return { status: "SALESFORCE_SYNCED", caseId, taskTitle, sentinelStatus };
+    return { status: "SALESFORCE_SYNCED", caseId, taskTitle, priority, status, assignee: assigneeInfo.name };
   } catch (err) {
     return { error: err.message };
   }

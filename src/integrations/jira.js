@@ -1,68 +1,52 @@
-// src/integrations/jira.js - 100% Dedicated Standalone Jira Ingestion
-
-function normalizeJiraPriority(raw) {
-  if (!raw) return "MEDIUM";
-  const p = String(raw).trim().toUpperCase();
-  if (p === "HIGHEST" || p === "CRITICAL" || p === "BLOCKER") return "CRITICAL";
-  if (p === "HIGH" || p === "MAJOR") return "HIGH";
-  if (p === "LOW" || p === "LOWEST" || p === "MINOR" || p === "TRIVIAL" || p === "INFORMATIONAL") return "LOW";
-  return "MEDIUM";
-}
-
-function normalizeJiraStatus(rawStatus) {
-  if (!rawStatus) return "PENDING";
-  const s = String(rawStatus).trim().toUpperCase();
-  if (s.includes("PROGRESS") || s.includes("WORKING") || s.includes("ACTIVE")) return "PROGRESS";
-  if (s.includes("DONE") || s.includes("RESOLVED") || s.includes("CLOSED")) return "COMPLETE";
-  if (s.includes("URGENT")) return "URGENT";
-  return "PENDING"; // "To Do", "Open", "Backlog"
-}
+import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
 
 export async function handleJiraWebhook(request, env, tenantId, defaultDept = "ENG") {
   try {
     const payload = await request.json();
     const issue = payload.issue;
-    if (!issue) {
-      return { status: "IGNORED", reason: "No issue object in payload" };
-    }
+    if (!issue) return { status: "IGNORED", reason: "No issue object in payload" };
 
-    const issueKey = issue.key; // e.g. EO-21
+    const issueKey = issue.key;
     const summary = issue.fields?.summary || "Jira Task";
-    const priorityName = normalizeJiraPriority(issue.fields?.priority?.name);
-    const sentinelStatus = normalizeJiraStatus(issue.fields?.status?.name);
-
-    // Extract department from project key (e.g. EO) or fallback to default
+    const priority = normalizePriority(issue.fields?.priority?.name);
+    const status = normalizeStatus(issue.fields?.status?.name);
     const targetDept = (issue.fields?.project?.key || defaultDept).toUpperCase();
 
-    // Extract assignee (e.g. Alana Grant) - never fails if unregistered
-    const assigneeName = issue.fields?.assignee?.displayName || issue.fields?.assignee?.emailAddress || "Alana Grant";
+    const assigneeInfo = await resolveAssignee(
+      env, tenantId,
+      issue.fields?.assignee?.displayName,
+      issue.fields?.assignee?.emailAddress
+    );
 
-    // Extract labels (e.g. VIP)
-    const labels = Array.isArray(issue.fields?.labels) && issue.fields.labels.length > 0 
-      ? ` [${issue.fields.labels.join(", ")}]` 
+    const labels = Array.isArray(issue.fields?.labels) && issue.fields.labels.length > 0
+      ? ` [${issue.fields.labels.join(", ")}]`
       : "";
     const taskTitle = `[Jira ${issueKey}]${labels} ${summary}`;
 
+    let description = "";
+    if (typeof issue.fields?.description === "string") {
+      description = issue.fields.description;
+    } else if (issue.fields?.description?.content) {
+      try { description = JSON.stringify(issue.fields.description); } catch (e) {}
+    }
+
+    const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toISOString() : null;
+
     await env.DB.prepare(`
-      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'JIRA_WEBHOOK', 'JIRA')
+      INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, created_by, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'JIRA_WEBHOOK', 'JIRA')
       ON CONFLICT(task_id) DO UPDATE SET 
         title = excluded.title, 
+        description = excluded.description,
         status = excluded.status,
         priority = excluded.priority,
         assigned_to = excluded.assigned_to,
         dept_id = excluded.dept_id,
+        deadline = excluded.deadline,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(issueKey, tenantId, targetDept, assigneeName, taskTitle, priorityName, sentinelStatus).run();
+    `).bind(issueKey, tenantId, targetDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate).run();
 
-    return {
-      status: "JIRA_SYNCED",
-      issueKey,
-      title: taskTitle,
-      priority: priorityName,
-      statusName: sentinelStatus,
-      dept: targetDept
-    };
+    return { status: "JIRA_SYNCED", issueKey, title: taskTitle, priority, status, assignee: assigneeInfo.name };
   } catch (err) {
     return { error: err.message };
   }
