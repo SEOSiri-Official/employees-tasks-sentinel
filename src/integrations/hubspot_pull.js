@@ -3,7 +3,7 @@ import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js
 export async function syncHubspotTasksFromApi(env, tenantId, accessToken, defaultDept = "GROWTH") {
   const token = accessToken || env.HUBSPOT_ACCESS_TOKEN;
   if (!token) {
-    return { error: "HUBSPOT_TOKEN_REQUIRED", message: "Private App Access Token is required." };
+    return { error: "HUBSPOT_TOKEN_REQUIRED", message: "Private App Access Token is required via Cloudflare secret." };
   }
 
   try {
