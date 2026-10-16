@@ -1,3 +1,14 @@
+async function resolveTenantDynamically(request, env, body, platform) {
+  const url = new URL(request.url);
+  // 1. Explicit query parameter has highest priority
+  if (url.searchParams.get('tenant')) {
+    return url.searchParams.get('tenant').toUpperCase();
+  }
+  
+  // 2. Default to ETM for primary instance
+  return 'ETM';
+}
+
 // SEOSiri Enterprise Sentinel - Self-Healing Universal Sync Engine v4.5.0
 
 function getCorsHeaders(request) {
