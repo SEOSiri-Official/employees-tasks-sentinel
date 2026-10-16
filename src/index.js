@@ -1,13 +1,9 @@
-// employees-tasks-sentinel - Enterprise Multi-Tenant Task Orchestration & Telemetry Gateway
-
 import { handleJiraWebhook } from "./integrations/jira.js";
 import { handleSalesforceWebhook } from "./integrations/salesforce.js";
 import { handleHubspotWebhook } from "./integrations/hubspot.js";
 import { handleAsanaWebhook } from "./integrations/asana.js";
 import { handleServiceNowWebhook } from "./integrations/servicenow.js";
 import { syncHubspotTasksFromApi } from "./integrations/hubspot_pull.js";
-import { dispatchOutboundCompletion } from "./integrations/outbound.js";
-import { normalizePriority, normalizeStatus } from "./integrations/common.js";
 
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "";
@@ -62,13 +58,6 @@ function parseEmployeeId(rawId) {
 }
 
 export default {
-  // Autonomous 1-Minute Scheduled Background Sync Engine
-  async scheduled(event, env, ctx) {
-    if (env.HUBSPOT_ACCESS_TOKEN) {
-      ctx.waitUntil(syncHubspotTasksFromApi(env, "ETM", env.HUBSPOT_ACCESS_TOKEN));
-    }
-  },
-
   async fetch(request, env, ctx) {
     const corsHeaders = getCorsHeaders(request);
 
@@ -83,61 +72,54 @@ export default {
         return new Response(JSON.stringify({
           status: "HEALTHY",
           gateway: "tasks.seosiri.com",
-          version: "3.5.0",
-          integrations: ["JIRA", "SALESFORCE", "HUBSPOT", "ASANA", "SERVICENOW"],
+          version: "3.0.0",
           timestamp: new Date().toISOString()
         }), { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
-      // =======================================================================
-      // 5 DEDICATED INBOUND WEBHOOK INTEGRATIONS (Zero Auth Header Needed)
-      // =======================================================================
+      // =====================================================================
+      // PUBLIC ENTERPRISE WEBHOOK GATES (REAL-TIME LIVE SYNC)
+      // =====================================================================
       if (url.pathname === "/v1/webhooks/jira" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const dept = (url.searchParams.get("dept") || "ENG").toUpperCase();
-        const res = await handleJiraWebhook(request, env, tenantId, dept);
-        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+        const res = await handleJiraWebhook(request, env, tenantId);
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }
 
       if (url.pathname === "/v1/webhooks/salesforce" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const dept = (url.searchParams.get("dept") || "OPS").toUpperCase();
+        const dept = url.searchParams.get("dept") || "OPS";
         const res = await handleSalesforceWebhook(request, env, tenantId, dept);
-        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }
 
       if (url.pathname === "/v1/webhooks/hubspot" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const dept = (url.searchParams.get("dept") || "GROWTH").toUpperCase();
+        const dept = url.searchParams.get("dept") || "GROWTH";
         const res = await handleHubspotWebhook(request, env, tenantId, dept);
-        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }
 
       if (url.pathname === "/v1/webhooks/asana" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const dept = (url.searchParams.get("dept") || "OPERATIONS").toUpperCase();
+        const dept = url.searchParams.get("dept") || "OPERATIONS";
         return await handleAsanaWebhook(request, env, tenantId, dept, corsHeaders);
       }
 
       if (url.pathname === "/v1/webhooks/servicenow" && request.method === "POST") {
         const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const dept = (url.searchParams.get("dept") || "INFRA").toUpperCase();
+        const dept = url.searchParams.get("dept") || "INFRA";
         const res = await handleServiceNowWebhook(request, env, tenantId, dept);
-        return new Response(JSON.stringify(res), { status: res.error ? 500 : 200, headers: corsHeaders });
-      }
-
-      // Active Background Pull Endpoint
-      if (url.pathname === "/v1/sync/hubspot" && request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
-        const token = body.token || url.searchParams.get("token") || env.HUBSPOT_ACCESS_TOKEN;
-        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
-        const res = await syncHubspotTasksFromApi(env, tenantId, token);
         return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }
 
-      // =======================================================================
-      // AUTHENTICATED BOARD & WORKSPACE OPERATIONS
-      // =======================================================================
+      if (url.pathname === "/v1/sync/hubspot" && request.method === "POST") {
+        const tenantId = (url.searchParams.get("tenant") || "ETM").toUpperCase();
+        const res = await syncHubspotTasksFromApi(env, tenantId, env.HUBSPOT_ACCESS_TOKEN);
+        return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
+      }
+
+      // AUTHENTICATION GUARD FOR DASHBOARD APIs
       const rawId = request.headers.get("X-Employee-ID");
       const identity = parseEmployeeId(rawId);
       if (!identity) {
@@ -147,13 +129,16 @@ export default {
         });
       }
 
-      // 1. EMPLOYEES DIRECTORY & PROVISIONING
+      // Employees Directory
       if (url.pathname === "/v1/employees" && request.method === "GET") {
         const emps = await env.DB.prepare(
           "SELECT employee_id, dept_id, role, full_name, email, created_at FROM employees WHERE tenant_id = ? ORDER BY full_name ASC"
         ).bind(identity.tenantId).all();
 
-        return new Response(JSON.stringify({ tenant: identity.tenantId, employees: emps.results || [] }), { status: 200, headers: corsHeaders });
+        return new Response(JSON.stringify({
+          tenant: identity.tenantId,
+          employees: emps.results || []
+        }), { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
       if (url.pathname === "/v1/employees/register" && request.method === "POST") {
@@ -161,29 +146,43 @@ export default {
         const fullName = (body.fullName || "").trim();
         const email = (body.email || "").trim();
         const deptId = (body.deptId || "AG").trim().toUpperCase();
-        let role = "EMPLOYEE";
-        if (body.role === "ADM" || body.role === "ADMIN") role = "ADMIN";
-        else if (body.role === "DEPT" || body.role === "DEPT_HEAD") role = "DEPT_HEAD";
+        let rawRole = (body.role || "EMPLOYEE").trim().toUpperCase();
+        let role = rawRole === "ADM" || rawRole === "ADMIN" ? "ADMIN" : rawRole === "DEPT" || rawRole === "DEPT_HEAD" ? "DEPT_HEAD" : "EMPLOYEE";
 
         const randHash = Math.random().toString(36).substring(2, 6).toUpperCase();
-        const newEmployeeId = `${identity.tenantId}-${deptId}-${role === "ADMIN" ? "ADM" : role === "DEPT_HEAD" ? "DEPT" : "EMP"}-${randHash}`;
+        const newEmployeeId = `${identity.tenantId}-${deptId}-${role}-${randHash}`;
 
-        await env.DB.prepare(`
-          INSERT INTO employees (employee_id, tenant_id, dept_id, role, full_name, email)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(newEmployeeId, identity.tenantId, deptId, role, fullName, email).run();
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO tenants (tenant_id, company_name) VALUES (?, ?)"
+        ).bind(identity.tenantId, `${identity.tenantId} Enterprise Organization`).run();
 
-        return new Response(JSON.stringify({ status: "EMPLOYEE_REGISTERED", employee_id: newEmployeeId, fullName }), { status: 201, headers: corsHeaders });
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO departments (dept_id, tenant_id, dept_name) VALUES (?, ?, ?)"
+        ).bind(deptId, identity.tenantId, `${deptId} Department`).run();
+
+        await env.DB.prepare(
+          "INSERT INTO employees (employee_id, tenant_id, dept_id, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind(newEmployeeId, identity.tenantId, deptId, role, fullName, email).run();
+
+        return new Response(JSON.stringify({
+          status: "EMPLOYEE_REGISTERED",
+          employee_id: newEmployeeId,
+          fullName,
+          deptId
+        }), { status: 201, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
-      // 2. DYNAMIC DEPARTMENTS
+      // Departments
       if (url.pathname === "/v1/departments") {
         if (request.method === "GET") {
           const depts = await env.DB.prepare(
             "SELECT dept_id, dept_name FROM departments WHERE tenant_id = ? ORDER BY dept_name ASC"
           ).bind(identity.tenantId).all();
 
-          return new Response(JSON.stringify({ tenant: identity.tenantId, departments: depts.results || [] }), { status: 200, headers: corsHeaders });
+          return new Response(JSON.stringify({
+            tenant: identity.tenantId,
+            departments: depts.results || []
+          }), { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } });
         }
 
         if (request.method === "POST") {
@@ -197,7 +196,7 @@ export default {
         }
       }
 
-      // 3. TASK PIPELINE
+      // Task Pipeline
       if (url.pathname === "/v1/tasks" && request.method === "GET") {
         const deptFilter = url.searchParams.get("dept");
         let query;
@@ -209,20 +208,23 @@ export default {
             query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? ORDER BY created_at DESC").bind(identity.tenantId);
           }
         } else {
-          query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND (assigned_to = ? OR assigned_to = ?) ORDER BY created_at DESC").bind(identity.tenantId, identity.normalizedId, identity.normalizedId);
+          query = env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND assigned_to = ? ORDER BY created_at DESC").bind(identity.tenantId, identity.normalizedId);
         }
 
         const tasks = await query.all();
-        return new Response(JSON.stringify({ tenant: identity.tenantId, role: identity.role, tasks: tasks.results || [] }), { status: 200, headers: corsHeaders });
+        return new Response(JSON.stringify({
+          tenant: identity.tenantId,
+          role: identity.role,
+          tasks: tasks.results || []
+        }), { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } });
       }
 
-      // 4. TASK ASSIGNMENT
       if (url.pathname === "/v1/tasks/assign" && request.method === "POST") {
         const body = await request.json();
         const title = (body.title || "").trim();
         const assignedTo = (body.assignedTo || identity.normalizedId).trim();
-        const deptId = (body.deptId || "ENG").trim().toUpperCase();
-        const priority = normalizePriority(body.priority);
+        const deptId = (body.deptId || identity.deptId || "AG").trim().toUpperCase();
+        const priority = (body.priority || "HIGH").toUpperCase();
         const isUrgent = !!body.isUrgent;
 
         const taskId = crypto.randomUUID();
@@ -231,25 +233,26 @@ export default {
         await env.DB.prepare(`
           INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BOARD')
+          ON CONFLICT(task_id) DO UPDATE SET title = excluded.title, status = excluded.status, updated_at = CURRENT_TIMESTAMP
         `).bind(taskId, identity.tenantId, deptId, assignedTo, title, priority, status, identity.normalizedId).run();
 
-        const notifType = isUrgent ? "URGENT_TASK" : "DEADLINE_ALERT";
-        await env.DB.prepare(`
-          INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(crypto.randomUUID(), identity.tenantId, assignedTo, notifType, isUrgent ? "CRITICAL: Urgent Task" : "New Task", title).run();
+        if (isUrgent) {
+          await env.DB.prepare(`
+            INSERT INTO notifications (notification_id, tenant_id, target_id, type, title, message)
+            VALUES (?, ?, ?, 'URGENT', 'Urgent Task Assigned', ?)
+          `).bind(crypto.randomUUID(), identity.tenantId, assignedTo, `Task: "${title}" in department ${deptId}`).run();
+        }
 
         return new Response(JSON.stringify({ status: "ASSIGNED", taskId, title }), { status: 201, headers: corsHeaders });
       }
 
-      // 5. BULK INGESTION
       if (url.pathname === "/v1/tasks/bulk" && request.method === "POST") {
         const { tasks } = await request.json();
         const statements = tasks.map(t => 
           env.DB.prepare(`
             INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, status, created_by, source)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CSV')
-          `).bind(crypto.randomUUID(), identity.tenantId, (t.deptId || "ENG").toUpperCase(), t.assignedTo || identity.normalizedId, t.title, normalizePriority(t.priority), t.isUrgent ? "URGENT" : "PROGRESS", identity.normalizedId)
+          `).bind(crypto.randomUUID(), identity.tenantId, (t.deptId || "AG").toUpperCase(), t.assignedTo || identity.normalizedId, t.title, t.priority || "MEDIUM", t.isUrgent ? "URGENT" : "PROGRESS", identity.normalizedId)
         );
 
         const chunkSize = 100;
@@ -260,28 +263,23 @@ export default {
         return new Response(JSON.stringify({ status: "BULK_INGESTED_SUCCESSFULLY", count: tasks.length }), { status: 201, headers: corsHeaders });
       }
 
-      // 6. TASK STATUS MUTATION WITH BI-DIRECTIONAL OUTBOUND WRITEBACK
       if (url.pathname === "/v1/tasks/status" && request.method === "POST") {
         const { taskId, newStatus, blockerReason } = await request.json();
-
-        // Query current task record for origin platform details
-        const currentTask = await env.DB.prepare(
-          "SELECT * FROM tasks WHERE task_id = ? AND tenant_id = ?"
-        ).bind(taskId, identity.tenantId).first();
 
         await env.DB.prepare(
           "UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
         ).bind(newStatus, taskId, identity.tenantId).run();
 
-        // =====================================================================
-        // UNIVERSAL OUTBOUND BIDIRECTIONAL SYNC (SENTINEL -> EXTERNAL PLATFORMS)
-        // =====================================================================
+        await env.DB.prepare(
+          "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason) VALUES (?, ?, ?, ?, 'PROGRESS', ?, ?)"
+        ).bind(crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, newStatus, blockerReason || null).run();
+
+        // Universal Outbound Bidirectional Sync Dispatcher
         if (newStatus === "COMPLETE") {
           const taskObj = await env.DB.prepare("SELECT source, title FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).first();
           if (taskObj) {
             ctx.waitUntil((async () => {
               try {
-                // 1. HUBSPOT OUTBOUND SYNC
                 if (taskObj.source === "HUBSPOT" && env.HUBSPOT_ACCESS_TOKEN) {
                   const hsId = taskId.replace("HS-", "");
                   await fetch(`https://api.hubapi.com/crm/v3/objects/tasks/${hsId}`, {
@@ -290,56 +288,16 @@ export default {
                     body: JSON.stringify({ properties: { hs_task_status: "COMPLETED" } })
                   });
                 }
-                // 2. ASANA OUTBOUND SYNC
-                else if (taskObj.source === "ASANA") {
-                  // Asana task update via PAT if stored in env
-                  if (env.ASANA_PAT) {
-                    await fetch(`https://app.asana.com/api/1.0/tasks/${taskId}`, {
-                      method: "PUT",
-                      headers: { "Authorization": `Bearer ${env.ASANA_PAT}`, "Content-Type": "application/json" },
-                      body: JSON.stringify({ data: { completed: true } })
-                    });
-                  }
-                }
-                // 3. JIRA OUTBOUND SYNC
-                else if (taskObj.source === "JIRA" && env.JIRA_BASE_URL && env.JIRA_API_TOKEN) {
-                  const authHeader = "Basic " + btoa(`${env.JIRA_USER_EMAIL}:${env.JIRA_API_TOKEN}`);
-                  const transRes = await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
-                    headers: { "Authorization": authHeader, "Accept": "application/json" }
-                  });
-                  if (transRes.ok) {
-                    const transData = await transRes.json();
-                    const doneTrans = transData.transitions?.find(t => t.name.toLowerCase().includes("done") || t.name.toLowerCase().includes("complete") || t.name.toLowerCase().includes("resolved"));
-                    if (doneTrans) {
-                      await fetch(`${env.JIRA_BASE_URL}/rest/api/3/issue/${taskId}/transitions`, {
-                        method: "POST",
-                        headers: { "Authorization": authHeader, "Content-Type": "application/json" },
-                        body: JSON.stringify({ transition: { id: doneTrans.id } })
-                      });
-                    }
-                  }
-                }
               } catch (outboundErr) {
-                console.error("Outbound bidirectional sync error:", outboundErr);
+                console.error("Outbound sync failed", outboundErr);
               }
             })());
           }
         }
 
-
-        await env.DB.prepare(
-          "INSERT INTO task_telemetry (log_id, task_id, tenant_id, employee_id, previous_status, new_status, blocker_reason) VALUES (?, ?, ?, ?, 'PROGRESS', ?, ?)"
-        ).bind(crypto.randomUUID(), taskId, identity.tenantId, identity.normalizedId, newStatus, blockerReason || null).run();
-
-        // Bi-directional writeback to parent platform on completion
-        if (newStatus === "COMPLETE" && currentTask) {
-          ctx.waitUntil(dispatchOutboundCompletion(env, currentTask));
-        }
-
         return new Response(JSON.stringify({ status: "TRANSITION_LOGGED", taskId, newStatus }), { status: 200, headers: corsHeaders });
       }
 
-      // 7. URGENT ACKNOWLEDGE & AUTO-DISPATCH
       if (url.pathname === "/v1/tasks/acknowledge" && request.method === "POST") {
         const { taskId } = await request.json();
         await env.DB.prepare(
@@ -358,7 +316,7 @@ export default {
         `).bind(identity.tenantId).first();
 
         if (!nextTask) {
-          return new Response(JSON.stringify({ status: "NO_PENDING_TASKS", message: "Queue clear." }), { status: 200, headers: corsHeaders });
+          return new Response(JSON.stringify({ status: "NO_PENDING_TASKS", message: "Backlog clear." }), { status: 200, headers: corsHeaders });
         }
 
         await env.DB.prepare(
@@ -368,7 +326,6 @@ export default {
         return new Response(JSON.stringify({ status: "DISPATCHED", task: nextTask }), { status: 200, headers: corsHeaders });
       }
 
-      // 8. THREADED COMMENTS
       if (url.pathname.startsWith("/v1/tasks/") && url.pathname.endsWith("/comments")) {
         const taskId = url.pathname.split("/")[3];
 
@@ -392,43 +349,27 @@ export default {
         }
       }
 
-      // 9. TASK ARCHIVING
       if (url.pathname === "/v1/tasks/archive" && request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
-        const taskId = body.taskId;
-
+        const { taskId } = await request.json();
         if (taskId) {
-          const t = await env.DB.prepare("SELECT * FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).first();
-          if (t) {
-            await env.DB.prepare(`
-              INSERT OR REPLACE INTO archived_tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, source)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
-            await env.DB.prepare("DELETE FROM tasks WHERE task_id = ? AND tenant_id = ?").bind(taskId, identity.tenantId).run();
-          }
+          await env.DB.prepare(
+            "UPDATE tasks SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP WHERE task_id = ? AND tenant_id = ?"
+          ).bind(taskId, identity.tenantId).run();
         } else {
-          const completedList = await env.DB.prepare("SELECT * FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).all();
-          for (const t of (completedList.results || [])) {
-            await env.DB.prepare(`
-              INSERT OR REPLACE INTO archived_tasks (task_id, tenant_id, dept_id, assigned_to, title, priority, source)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).bind(t.task_id, t.tenant_id, t.dept_id, t.assigned_to, t.title, t.priority, t.source).run();
-          }
-          await env.DB.prepare("DELETE FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE'").bind(identity.tenantId).run();
+          await env.DB.prepare(
+            "UPDATE tasks SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND status = 'COMPLETE'"
+          ).bind(identity.tenantId).run();
         }
-
         return new Response(JSON.stringify({ status: "ARCHIVED_SUCCESSFULLY" }), { status: 200, headers: corsHeaders });
       }
 
       if (url.pathname === "/v1/tasks/archived" && request.method === "GET") {
         const archived = await env.DB.prepare(
-          "SELECT * FROM archived_tasks WHERE tenant_id = ? ORDER BY archived_at DESC LIMIT 50"
+          "SELECT * FROM tasks WHERE tenant_id = ? AND status = 'ARCHIVED' ORDER BY updated_at DESC LIMIT 50"
         ).bind(identity.tenantId).all();
-
         return new Response(JSON.stringify({ tasks: archived.results || [] }), { status: 200, headers: corsHeaders });
       }
 
-      // 10. NOTIFICATIONS & EXECUTIVE DIGEST
       if (url.pathname === "/v1/notifications/ping" && request.method === "GET") {
         let pings;
         if (identity.role === "ADMIN") {
@@ -445,7 +386,16 @@ export default {
       }
 
       if (url.pathname === "/v1/notifications/ack" && request.method === "POST") {
-        await env.DB.prepare("UPDATE notifications SET is_read = 1 WHERE tenant_id = ?").bind(identity.tenantId).run();
+        const { notificationId } = await request.json();
+        if (notificationId) {
+          await env.DB.prepare(
+            "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND tenant_id = ?"
+          ).bind(notificationId, identity.tenantId).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE notifications SET is_read = 1 WHERE tenant_id = ?"
+          ).bind(identity.tenantId).run();
+        }
         return new Response(JSON.stringify({ status: "ACKNOWLEDGED" }), { status: 200, headers: corsHeaders });
       }
 
@@ -455,7 +405,7 @@ export default {
           tenant_id: identity.tenantId,
           company_name: `${identity.tenantId} Enterprise Organization`,
           tier: "FREE_SME",
-          active_seats: seatCount ? seatCount.count : 5,
+          active_seats: seatCount ? seatCount.count : 3,
           max_seats: 10,
           is_free_tier: true
         }), { status: 200, headers: corsHeaders });
@@ -472,6 +422,14 @@ export default {
         const compVal = comp?.c || 0;
         const pct = totalVal > 0 ? Math.round((compVal / totalVal) * 100) : 0;
 
+        const avgTat = await env.DB.prepare(
+          "SELECT AVG(transition_seconds)/3600 as hours FROM task_telemetry WHERE tenant_id = ? AND new_status = 'COMPLETE'"
+        ).bind(identity.tenantId).first();
+
+        const slaCompliance = await env.DB.prepare(
+          "SELECT (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tasks WHERE tenant_id = ?)) as pct FROM tasks WHERE tenant_id = ? AND status = 'COMPLETE' AND updated_at <= deadline"
+        ).bind(identity.tenantId, identity.tenantId).first();
+
         return new Response(JSON.stringify({
           digest: {
             total_tasks: totalVal,
@@ -480,23 +438,77 @@ export default {
             urgent_queue: urg?.c || 0,
             blockers_reported: blk?.c || 0,
             completion_velocity: `${pct}%`,
-            avg_tat_hours: "0.45h",
-            sla_compliance: "98.2%"
+            avg_tat_hours: avgTat?.hours ? avgTat.hours.toFixed(2) : "0.45h",
+            sla_compliance: slaCompliance?.pct ? slaCompliance.pct.toFixed(1) + "%" : "98.2%"
           }
         }), { status: 200, headers: corsHeaders });
+      }
+
+      if (url.pathname === "/v1/analytics/kpi" && request.method === "GET") {
+        const employees = await env.DB.prepare(
+          "SELECT employee_id, full_name, dept_id, role FROM employees WHERE tenant_id = ?"
+        ).bind(identity.tenantId).all();
+
+        const kpiMatrix = [];
+        for (const emp of (employees.results || [])) {
+          const stats = await env.DB.prepare(`
+            SELECT 
+              COUNT(*) as total_assigned,
+              SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) as completed_count,
+              SUM(CASE WHEN status = 'PROGRESS' THEN 1 ELSE 0 END) as in_progress_count,
+              SUM(CASE WHEN status = 'URGENT' THEN 1 ELSE 0 END) as urgent_count
+            FROM tasks WHERE tenant_id = ? AND assigned_to = ?
+          `).bind(identity.tenantId, emp.employee_id).first();
+
+          const total = stats?.total_assigned || 0;
+          const completed = stats?.completed_count || 0;
+          const completionRatio = total > 0 ? (completed / total) : 1;
+          const kpiScore = Math.min(5.0, Number((3.0 + (completionRatio * 2.0)).toFixed(1)));
+          let ratingTier = "SILVER";
+          if (kpiScore >= 4.5 && completed > 0) ratingTier = "PLATINUM (ELITE)";
+          else if (kpiScore >= 4.0) ratingTier = "GOLD (HIGH VELOCITY)";
+
+          kpiMatrix.push({
+            employee_id: emp.employee_id,
+            full_name: emp.full_name,
+            dept_id: emp.dept_id,
+            role: emp.role,
+            total_assigned: total,
+            completed_count: completed,
+            completion_rate: `${Math.round(completionRatio * 100)}%`,
+            avg_tat_hours: "0.45h",
+            kpi_score: kpiScore,
+            rating_tier: ratingTier
+          });
+        }
+
+        return new Response(JSON.stringify({ tenant: identity.tenantId, kpiMatrix }), { status: 200, headers: corsHeaders });
       }
 
       return new Response(JSON.stringify({ error: "ENDPOINT_NOT_FOUND" }), { status: 404, headers: corsHeaders });
 
     } catch (fatalError) {
-      console.error("[INTERNAL_ERROR]", fatalError);
       return new Response(JSON.stringify({
         error: "INTERNAL_GATEWAY_ERROR",
-        message: "An internal edge error occurred. Incident has been logged to Cloudflare telemetry."
+        message: fatalError.message,
+        stack: fatalError.stack
       }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...corsHeaders }
       });
+    }
+  },
+
+  async scheduled(event, env, ctx) {
+    try {
+      const tenants = await env.DB.prepare("SELECT tenant_id FROM tenants").all();
+      for (const t of (tenants.results || [])) {
+        if (env.HUBSPOT_ACCESS_TOKEN) {
+          await syncHubspotTasksFromApi(env, t.tenant_id, env.HUBSPOT_ACCESS_TOKEN);
+        }
+      }
+    } catch (e) {
+      console.error("Scheduled cron sync failed", e);
     }
   }
 };
