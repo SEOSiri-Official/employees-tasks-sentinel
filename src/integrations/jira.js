@@ -1,8 +1,8 @@
 import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
 
-export async function handleJiraWebhook(request, env, tenantId, defaultDept = "ENG") {
+export async function handleJiraWebhook(data, env, tenantId, defaultDept = "ENG") {
   try {
-    const payload = await request.json();
+    const payload = (data && typeof data.json === "function") ? await data.json() : data;
     const issue = payload.issue;
     if (!issue) return { status: "IGNORED", reason: "No issue object in payload" };
 
@@ -15,8 +15,7 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
     const assigneeInfo = await resolveAssignee(
       env, tenantId,
       issue.fields?.assignee?.displayName,
-      issue.fields?.assignee?.emailAddress,
-      targetDept
+      issue.fields?.assignee?.emailAddress
     );
 
     const labelsArray = Array.isArray(issue.fields?.labels) ? issue.fields.labels : [];
@@ -28,13 +27,7 @@ export async function handleJiraWebhook(request, env, tenantId, defaultDept = "E
     if (typeof issue.fields?.description === "string") {
       description = issue.fields.description;
     } else if (issue.fields?.description?.content) {
-      try {
-        description = issue.fields.description.content
-          .map(c => c.content ? c.content.map(n => n.text || "").join("") : "")
-          .join("\n");
-      } catch (e) {
-        description = "Atlassian Document Format";
-      }
+      try { description = JSON.stringify(issue.fields.description); } catch (e) {}
     }
 
     const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toISOString() : null;

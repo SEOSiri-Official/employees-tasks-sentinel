@@ -1,15 +1,15 @@
 import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
 
-export async function handleServiceNowWebhook(request, env, tenantId, defaultDept = "INFRA") {
+export async function handleServiceNowWebhook(data, env, tenantId, defaultDept = "INFRA") {
   try {
-    const payload = await request.json();
+    const payload = (data && typeof data.json === "function") ? await data.json() : data;
     const incNumber = payload.number || payload.sys_id || `INC-${Date.now().toString().slice(-6)}`;
     const summary = payload.short_description || payload.description || "ServiceNow Enterprise Incident";
     const priority = normalizePriority(payload.priority);
     const status = normalizeStatus(payload.state || payload.incident_state);
 
     const rawAssignee = payload.assigned_to_name || payload.assigned_to || payload.caller_id || null;
-    const assigneeInfo = await resolveAssignee(env, tenantId, rawAssignee, payload.assigned_to_email, defaultDept);
+    const assigneeInfo = await resolveAssignee(env, tenantId, rawAssignee, payload.assigned_to_email);
 
     const taskTitle = `[ServiceNow ${incNumber}] ${summary}`;
     const description = payload.description || payload.close_notes || "";

@@ -86,20 +86,31 @@ export default {
       }
 
       // Dynamic Webhooks Router (Jira, Salesforce, HubSpot, Asana, ServiceNow)
+      // Dynamic Universal Webhooks Router (Single Stream Parse - Zero Body Lock)
       if (url.pathname.startsWith("/v1/webhooks/") && request.method === "POST") {
         const pathParts = url.pathname.split("/");
         const platform = (pathParts[3] || "UNKNOWN").toUpperCase();
 
-        let rawBody = {};
-        try { rawBody = await request.clone().json(); } catch (e) { rawBody = {}; }
-        const tenantId = await resolveTenantDynamically(request, env, rawBody, platform);
+        // Check for Asana handshake before reading body
+        if (platform === "ASANA" && request.headers.get("X-Hook-Secret")) {
+          return await handleAsanaWebhook(request, env, "ETM", "OPERATIONS", corsHeaders);
+        }
+
+        let payload = {};
+        try {
+          payload = await request.json();
+        } catch (e) {
+          payload = {};
+        }
+
+        const tenantId = await resolveTenantDynamically(request, env, payload, platform);
 
         let res = { status: "PROCESSED" };
-        if (platform === "JIRA") res = await handleJiraWebhook(request, env, tenantId);
-        else if (platform === "SALESFORCE") res = await handleSalesforceWebhook(request, env, tenantId, "OPS");
-        else if (platform === "HUBSPOT") res = await handleHubspotWebhook(request, env, tenantId, "GROWTH");
-        else if (platform === "ASANA") return await handleAsanaWebhook(request, env, tenantId, "OPERATIONS", corsHeaders);
-        else if (platform === "SERVICENOW") res = await handleServiceNowWebhook(request, env, tenantId, "INFRA");
+        if (platform === "JIRA") res = await handleJiraWebhook(payload, env, tenantId);
+        else if (platform === "SALESFORCE") res = await handleSalesforceWebhook(payload, env, tenantId, "OPS");
+        else if (platform === "HUBSPOT") res = await handleHubspotWebhook(payload, env, tenantId, "GROWTH");
+        else if (platform === "ASANA") res = await handleAsanaWebhook(payload, env, tenantId, "OPERATIONS", corsHeaders);
+        else if (platform === "SERVICENOW") res = await handleServiceNowWebhook(payload, env, tenantId, "INFRA");
 
         return new Response(JSON.stringify(res), { status: res.error ? 400 : 200, headers: corsHeaders });
       }

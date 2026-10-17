@@ -1,8 +1,8 @@
 import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
 
-export async function handleHubspotWebhook(request, env, tenantId, defaultDept = "GROWTH") {
+export async function handleHubspotWebhook(data, env, tenantId, defaultDept = "GROWTH") {
   try {
-    const rawPayload = await request.json();
+    const rawPayload = (data && typeof data.json === "function") ? await data.json() : data;
     const events = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
 
     for (const item of events) {
@@ -14,7 +14,7 @@ export async function handleHubspotWebhook(request, env, tenantId, defaultDept =
 
       const ownerName = properties.hubspot_owner_id?.label || properties.ticket_owner_name || null;
       const ownerEmail = properties.ticket_owner_email || null;
-      const assigneeInfo = await resolveAssignee(env, tenantId, ownerName, ownerEmail, defaultDept);
+      const assigneeInfo = await resolveAssignee(env, tenantId, ownerName, ownerEmail);
 
       const taskTitle = `[HubSpot HS-${ticketId}] ${subject}`;
       const description = properties.content?.value || item.description || "";
