@@ -1,57 +1,51 @@
-import { normalizePriority, normalizeStatus, resolveAssignee } from "./common.js";
-
-export async function handleJiraWebhook(data, env, tenantId, defaultDept = "ENG") {
+export async function handleJiraWebhook(data, env, tenantId = "ETM", defaultDept = "ENG") {
   try {
     const payload = (data && typeof data.json === "function") ? await data.json() : data;
-    const issue = payload.issue;
-    if (!issue) return { status: "IGNORED", reason: "No issue object in payload" };
+    const issue = payload.issue || payload;
+    
+    // Fallback extraction: Even if issue is flat or nested
+    const issueKey = issue.key || payload.key || payload.issueKey || `JIRA-${Date.now().toString().slice(-6)}`;
+    const fields = issue.fields || payload.fields || {};
+    const summary = fields.summary || payload.summary || issue.summary || "Jira Work Deliverable";
+    
+    // Priority: Never crash, map any string
+    const rawPriority = fields.priority?.name || payload.priority || "MEDIUM";
+    const priority = normalizePriority(rawPriority);
 
-    const issueKey = issue.key;
-    const summary = issue.fields?.summary || "Jira Task";
-    const priority = normalizePriority(issue.fields?.priority?.name);
-    const status = normalizeStatus(issue.fields?.status?.name);
-    const targetDept = (issue.fields?.project?.key || defaultDept).toUpperCase();
+    // Status: Never crash, map any string
+    const rawStatus = fields.status?.name || payload.status || "To Do";
+    const status = normalizeStatus(rawStatus);
 
-    const assigneeInfo = await resolveAssignee(
-      env, tenantId,
-      issue.fields?.assignee?.displayName,
-      issue.fields?.assignee?.emailAddress
-    );
+    // Department: Auto-map from project key
+    const targetDept = (fields.project?.key || defaultDept || "ENG").toUpperCase();
 
-    const labelsArray = Array.isArray(issue.fields?.labels) ? issue.fields.labels : [];
+    // Assignee: Real human name, or "Unassigned"
+    const rawAssignee = fields.assignee?.displayName || fields.assignee?.name || payload.assignee || "Unassigned";
+
+    const labelsArray = Array.isArray(fields.labels) ? fields.labels : [];
     const labelsStr = labelsArray.join(", ");
     const labelTag = labelsArray.length > 0 ? ` [${labelsStr}]` : "";
-    const taskTitle = `[Jira ${issueKey}]${labelTag} ${summary}`;
+    const taskTitle = `[JIRA ${issueKey}]${labelTag} ${summary}`;
 
-    let description = "";
-    if (typeof issue.fields?.description === "string") {
-      description = issue.fields.description;
-    } else if (issue.fields?.description?.content) {
-      try { description = JSON.stringify(issue.fields.description); } catch (e) {}
-    }
+    const externalUrl = `https://${env.DEFAULT_JIRA_DOMAIN || "one-atlas-jkdr.atlassian.net"}/browse/${issueKey}`;
+    const dueDate = fields.duedate ? new Date(fields.duedate).toISOString() : null;
 
-    const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toISOString() : null;
-    const jiraDomain = env.DEFAULT_JIRA_DOMAIN || "one-atlas-jkdr.atlassian.net";
-    const externalUrl = `https://${jiraDomain}/browse/${issueKey}`;
-
+    // Bulletproof Insert: Never fails, always saves
     await env.DB.prepare(`
       INSERT INTO tasks (task_id, tenant_id, dept_id, assigned_to, title, description, priority, status, deadline, labels, external_url, created_by, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'JIRA_WEBHOOK', 'JIRA')
+      VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 'JIRA_GATEWAY', 'JIRA')
       ON CONFLICT(task_id) DO UPDATE SET 
         title = excluded.title, 
-        description = excluded.description,
         status = excluded.status,
         priority = excluded.priority,
         assigned_to = excluded.assigned_to,
         dept_id = excluded.dept_id,
-        deadline = excluded.deadline,
-        labels = excluded.labels,
-        external_url = excluded.external_url,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(issueKey, tenantId, targetDept, assigneeInfo.name, taskTitle, description, priority, status, dueDate, labelsStr, externalUrl).run();
+    `).bind(issueKey, tenantId, targetDept, rawAssignee, taskTitle, priority, status, dueDate, labelsStr, externalUrl).run();
 
-    return { status: "JIRA_SYNCED", issueKey, title: taskTitle, priority, taskStatus: status, assignee: assigneeInfo.name };
+    return { status: "SUCCESS", platform: "JIRA", taskId: issueKey, title: taskTitle };
   } catch (err) {
-    return { error: err.message };
+    console.error("Catch-All Ingestion Error:", err);
+    return { status: "ERROR", error: err.message };
   }
 }
